@@ -45,7 +45,7 @@ htmlcov/
 # ─── MAYA Data & Models ────────────────────────────────────────────────────────
 data/*.db
 data/*.sqlite
-models/
+/models/          # Root-level only: downloaded ML model weights (large binary files)
 *.gguf
 *.bin
 
