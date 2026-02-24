@@ -1,0 +1,58 @@
+# MAYA - .gitignore
+
+# ─── SECRETS - NEVER COMMIT THESE ─────────────────────────────────────────────
+.env                     # Your actual API keys live here - NEVER commit
+.env.local
+.env.*.local
+*_secret*
+*_credentials*
+*_private*
+secrets/
+credentials/
+
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# ─── Virtual Environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Testing & Coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── MAYA Data & Models ────────────────────────────────────────────────────────
+data/*.db
+data/*.sqlite
+models/
+*.gguf
+*.bin
+
+# ─── LangSmith / LangChain cache ───────────────────────────────────────────────
+.langchain.db
+langchain_cache/
+
+# ─── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

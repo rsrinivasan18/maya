@@ -1,0 +1,10 @@
+# agents package - 8 agents will live here (Weeks 1-6)
+# Planned agents (from MAYA_CONTEXT.md):
+#   wake_word.py       - Detect "Hey Maya" (always offline)
+#   intent_router.py   - Classify query complexity (offline)
+#   conversation.py    - General chat, STEM Q&A (Sarvam/Claude)
+#   math_tutor.py      - Solve + explain math (local capable)
+#   story.py           - Hindi/English stories (online preferred)
+#   vocabulary.py      - Word of the day (local)
+#   memory.py          - Load/save personality (SQLite, offline)
+#   session_manager.py - Load daughter's profile (local)

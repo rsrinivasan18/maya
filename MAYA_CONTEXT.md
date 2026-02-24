@@ -1,0 +1,293 @@
+# 🤖 MAYA - Multi-Agent hYbrid Assistant
+## Master Project Context Document
+### Version: 2.0 | Updated: February 2026 | Status: Pre-Development
+
+---
+
+## 🎯 PROJECT IDENTITY
+
+**Name:** MAYA  
+**Full Form:** Multi-Agent hYbrid Assistant  
+**Named by:** Srinivasan's 10-year-old daughter ❤️  
+**Sanskrit meaning:** माया (Magic/Illusion) - perfect for an AI companion  
+**Tagline:** Bilingual STEM companion for curious kids  
+
+---
+
+## 👨‍💻 BUILDER CONTEXT
+
+**Who:** Srinivasan - AI Architect at BNP Paribas Singapore  
+**Experience:** 15+ years (Data Engineering, ML, MLOps, GenAI)  
+**Current stack at work:** LangGraph, LangChain, TigerGraph, LangSmith  
+**Development time:** 2-4 hrs/day (office GenAI time + evenings after gym)  
+**Philosophy:** coding with AI assistance - build fast, understand, iterate  
+**GitHub:** Push every session, even messy code  
+
+---
+
+## 🌟 VISION & PURPOSE
+
+### Primary Purpose
+Bilingual Hindi/English AI companion that helps Srinivasan's daughter learn STEM concepts through natural voice conversation - running on edge hardware (Raspberry Pi 5).
+
+### Why This Project
+1. **Family:** Meaningful father-daughter project - daughter will watch Maya being born
+2. **Learning:** Real hands-on LangGraph + edge AI experience
+3. **Portfolio:** Demonstrates edge AI, bilingual NLP, multi-agent systems for Lead AI Architect interviews
+4. **Future:** Foundation for agentic Sarasai (stock analysis platform)
+
+### What MAYA Does
+- Hears daughter's voice (Hindi or English or Hinglish)
+- Thinks locally on RPi5 + Hailo chip, initial prototype in windows laptop
+- Responds in natural Hindi/English
+- Shows animated face/emotions on display
+- Teaches STEM concepts adaptively
+- Remembers past conversations (evolving personality)
+- Works fully offline when needed
+
+---
+
+## 🏗️ ARCHITECTURE
+
+### Core Design Principle
+**Hybrid Online/Offline** - Smart routing between local and cloud models
+
+```
+Voice Input (Whisper STT)
+        ↓
+Wake Word Agent (ALWAYS offline)
+        ↓
+Intent Router Agent
+    /           \
+Offline         Online
+(Local LLM)     (Sarvam API / Claude)
+    \           /
+    Response Generation
+        ↓
+Voice Output (Piper TTS)
+        +
+Display (Animated face + text)
+```
+
+### Agent Architecture (LangGraph)
+
+| Agent | Role | Model | Always Online? |
+|-------|------|-------|---------------|
+| Wake Word Agent | Detect "Hey Maya" | Local only | No (offline) |
+| Intent Router | Classify query complexity | Local | No (offline) |
+| Conversation Agent | General chat, STEM Q&A | Sarvam/Claude | Preferred online |
+| Math Tutor Agent | Solve + explain math | Local capable | Optional |
+| Story Agent | Hindi/English stories | Online preferred | Optional |
+| Vocabulary Agent | Word of the day | Local | No (offline) |
+| Memory Agent | Load/save personality | Local SQLite | No (offline) |
+| Session Manager | Load daughter's profile | Local | No (offline) |
+
+### Online/Offline Switching Logic
+- **Simple questions** → Offline (fast, no cost, private)
+- **Complex STEM explanations** → Online (better quality)
+- **No internet / Bhopal connectivity issues** → Fallback to offline always
+- **Night time** → Offline preferred
+- **Router decides** based on: complexity, connectivity, latency needs
+
+---
+
+## 💻 TECH STACK
+
+### Core
+- **Agent Orchestration:** LangGraph
+- **LLM Framework:** LangChain
+- **Backend:** FastAPI (Python 3.12+)
+- **Local LLM:** Ollama + Sarvam-2B quantized (4-bit)
+- **Bilingual Model:** Sarvam AI (built for Hindi/English Hinglish)
+- **STT:** Whisper tiny/base (local)
+- **TTS:** Piper TTS (offline) or Sarvam TTS (online)
+- **Memory:** SQLite (persistent personality, learning history)
+- **Observability:** LangSmith (free Developer tier)
+
+### Why Sarvam AI?
+- Built specifically for Indian languages
+- Handles Hinglish naturally (what 10yr old actually speaks)
+- Better than Gemma 2B for mixed Hindi/English
+- Sarvam-2B fits on RPi5 when quantized
+
+### Frontend (Display)
+- Python + Pygame OR simple React/HTML
+- Animated Maya face showing emotions
+- Text display for responses
+- STEM diagrams when needed
+
+---
+
+## 🔧 HARDWARE PLAN
+
+### Target Hardware (Raspberry Pi Setup)
+| Component | Spec | Price (SGD est.) |
+|-----------|------|-----------------|
+| Raspberry Pi 5 | 8GB RAM | ~125 |
+| AI HAT+ 2 | Hailo-10H, 40 TOPS, 8GB dedicated RAM | ~175 |
+| SunFounder 7" Display | IPS 1024x600, built-in speaker | ~70 |
+| USB Microphone | Quality mic for kids voice | ~20 |
+| Active Cooler | RPi5 official cooler | ~15 |
+| 64GB SD Card | Fast microSD | ~20 |
+| 27W USB-C PSU | Official RPi PSU | ~20 |
+| **TOTAL** | | **~SGD 445** |
+
+### Why AI HAT+ 2 (Hailo-10H)?
+- 40 TOPS with 8GB dedicated RAM (NEW - Jan 2026)
+- Designed specifically for GenAI/LLMs (original HAT+ couldn't run LLMs)
+- LLM inference won't compete with RPi5's main RAM
+- Hindi/English conversation needs GenAI capability
+
+### Phase 2 Hardware (Later)
+- SunFounder PiDog V2 kit (~SGD 120-150)
+- Port working Maya code to robot dog body
+- Same software, new physical form
+
+---
+
+## 📅 DEVELOPMENT STRATEGY
+
+### Key Principle: LAPTOP FIRST, RPi LATER
+**Validate entire software stack on laptop before touching hardware**
+###One step at a time. Dont rush. Human (I Srinivasan) should understand the code and learn it before commit.
+
+Reasons:
+- Separate software learning from hardware debugging
+- Faster iteration without RPi quirks
+- LangGraph agents work on laptop first
+- Hardware becomes reward when brain is ready
+- GitHub commits start immediately
+
+### Phase 1: Laptop Development (Weeks 1-6)
+**Goal: Working MAYA voice assistant on laptop**
+
+| Week | Focus | Deliverable |
+|------|-------|-------------|
+| 1 | LangGraph basics + hello world | First agent commit |
+| 2 | Add STT (Whisper) + TTS (Piper) | Voice I/O working |
+| 3 | Sarvam/Ollama integration | Hindi/English responses |
+| 4 | Multi-agent (3 agents) | Router + Tutor + Memory |
+| 5 | Online/offline switching | Hybrid model routing |
+| 6 | Display + personality | Animated face, memory |
+
+### Phase 2: Hardware Deployment (Weeks 7-8)
+- Buy RPi5 + Hailo-10H + Display (Sim Lim Square)
+- Port working laptop code to RPi
+- Just deployment, not re-debugging everything
+- PiDog kit purchase after voice assistant working
+
+### Phase 3: PiDog Integration (Month 3+)
+- Add robot dog body
+- Maya gets physical form
+- Same brain, new body
+
+---
+
+## 🎯 IMMEDIATE NEXT STEPS
+
+### Tonight (Wednesy)
+- [ ] Claude Code generates this context file ✅ (done)
+- [ ] Paste to Claude.ai for enrichment ✅ (done)
+- [ ] Save MAYA_CONTEXT.md to GitHub repo
+- [ ] Rest 😄
+
+### Tomorrow (Thursday)
+- [ ] Create GitHub repo: `maya-assistant` (in office)
+- [ ] Clone to laptop
+- [ ] Evening: Install LangGraph + hello world agent
+- [ ] First commit: `feat: MAYA hello world - first LangGraph agent`
+
+### This Week
+- [ ] LangGraph Academy modules (office GenAI time)
+- [ ] One small concept per evening
+- [ ] By Friday: Simple 2-3 node graph working
+
+### Next Weekend
+- [ ] Buy RPi5 + AI HAT+ 2 from Sim Lim Square
+- [ ] Order SunFounder display online
+
+---
+
+## 🔄 SESSION SYNC PROTOCOL
+
+### How to use this file across AI sessions
+
+**Starting Claude.ai session:**
+```
+"Here is my MAYA project context: [paste MAYA_CONTEXT.md]
+Today I want to work on: [specific task]"
+```
+
+**Starting Claude Code session:**
+```
+"Read MAYA_CONTEXT.md first.
+Today's task: [specific task]
+Build it following the architecture defined."
+```
+
+**After each session - update:**
+- Current Status section
+- Completed items
+- New decisions made
+- Next steps
+
+---
+
+## 📊 CURRENT STATUS TRACKER
+
+### Completed
+- ✅ Project vision defined
+- ✅ Architecture designed
+- ✅ Tech stack selected
+- ✅ Hardware researched (AI HAT+ 2 chosen)
+- ✅ Development strategy (laptop first)
+- ✅ Agent design (8 agents planned)
+- ✅ Project named by daughter
+- ✅ Context document created
+
+### In Progress
+- 🔄 LangGraph learning
+- 🔄 Hardware procurement planning
+
+### Pending
+- ⏳ GitHub repo creation
+- ⏳ Development environment setup
+- ⏳ Hello world LangGraph agent
+- ⏳ Hardware purchase 
+
+---
+
+## 🏆 PORTFOLIO VALUE
+
+**For Lead AI Architect interviews, MAYA demonstrates:**
+- Edge AI deployment on constrained hardware
+- Bilingual NLP (Hindi/English) - rare skill
+- LangGraph multi-agent orchestration
+- Hybrid online/offline architecture
+- Persistent memory + evolving personality
+- Multimodal I/O (voice + vision + display)
+- Fully offline capable system
+- Real-world use case (not just a demo)
+
+
+---
+
+## ⚠️ DECISIONS LOG
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Hardware acceleration | Hailo-10H (AI HAT+ 2) | Only one supporting GenAI/LLMs |
+| Bilingual model | Sarvam AI | Built for Hindi/English Hinglish |
+| Agent framework | LangGraph | Used at BNP, learning investment |
+| Development order | Laptop first | Validate before hardware complexity |
+| Product first | Voice assistant | Faster to build, daughter uses sooner |
+| Robot body | PiDog V2 later | Phase 2, after voice works |
+| Memory | SQLite | Simple, offline, persistent |
+| Coding approach | Vibe coding + AI | Build fast, understand, iterate |
+| Observability | LangSmith free tier | Sufficient for personal project |
+
+---
+
+*This document is the single source of truth for MAYA project.*  
+*Update after every meaningful session.*  
+*Commit to GitHub after every update.*
