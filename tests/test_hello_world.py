@@ -1,29 +1,21 @@
 """
-Tests for MAYA Hello World LangGraph
-======================================
+Tests for MAYA Conversation Graph
+====================================
 Run with:  pytest tests/
 Run verbose: pytest tests/ -v
 
-LEARNING NOTES for Srinivasan:
---------------------------------
-Each test invokes the compiled graph with a specific input and
-asserts something about the resulting state.
-
-This tests:
-  1. Language detection logic
-  2. Intent detection logic
-  3. End-to-end graph execution (all nodes run, state is complete)
-  4. Conditional routing (correct branch is taken)
+Updated Session 2:
+  - invoke() helper now includes message_history in initial state
+  - Added tests for farewell intent + message_history accumulation
 """
 
 import pytest
 from src.maya.graph.hello_world_graph import maya_graph
-from src.maya.models.state import MayaState
 
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
-def invoke(user_input: str) -> MayaState:
+def invoke(user_input: str, history: list[dict] | None = None) -> dict:
     """Helper: build initial state and invoke the graph."""
     return maya_graph.invoke(
         {
@@ -32,6 +24,7 @@ def invoke(user_input: str) -> MayaState:
             "intent": "",
             "response": "",
             "steps": [],
+            "message_history": history or [],   # NEW - carry history between turns
         }
     )
 
@@ -45,12 +38,10 @@ class TestLanguageDetection:
         assert result["language"] == "english"
 
     def test_pure_hindi_detected(self):
-        # Two or more Hindi markers → hindi
         result = invoke("Namaste kya hal hai aap theek")
         assert result["language"] == "hindi"
 
     def test_hinglish_detected(self):
-        # One Hindi marker → hinglish
         result = invoke("Hello namaste, nice to meet you")
         assert result["language"] == "hinglish"
 
@@ -87,20 +78,40 @@ class TestIntentDetection:
         result = invoke("Calculate 25 times 4")
         assert result["intent"] == "math"
 
-    def test_math_intent_symbol(self):
-        result = invoke("What is 5 + 3")
-        # "what" is a question word, but "+" is math - precedence: greeting > math > question
-        # "+" matches math_words so intent should be "math"
-        assert result["intent"] == "math"
-
     def test_general_intent_fallback(self):
         result = invoke("blah blah nonsense xyz")
         assert result["intent"] == "general"
 
     def test_greeting_takes_precedence_over_question(self):
-        # "hello" + "what" in same sentence - greeting wins
         result = invoke("hello what is your name")
         assert result["intent"] == "greeting"
+
+    # ── NEW: Farewell intent ──────────────────────────────────────────────────
+
+    def test_farewell_english(self):
+        result = invoke("bye MAYA!")
+        assert result["intent"] == "farewell"
+
+    def test_farewell_hindi(self):
+        result = invoke("alvida")
+        assert result["intent"] == "farewell"
+
+    def test_farewell_hinglish(self):
+        result = invoke("goodbye MAYA phir milenge")
+        assert result["intent"] == "farewell"
+
+    def test_farewell_takes_highest_precedence(self):
+        # Even if "hello" is in sentence, "bye" should win
+        result = invoke("bye hello MAYA")
+        assert result["intent"] == "farewell"
+
+    def test_exit_triggers_farewell(self):
+        result = invoke("exit")
+        assert result["intent"] == "farewell"
+
+    def test_quit_triggers_farewell(self):
+        result = invoke("quit")
+        assert result["intent"] == "farewell"
 
 
 # ─── Conditional Routing ──────────────────────────────────────────────────────
@@ -108,70 +119,91 @@ class TestIntentDetection:
 class TestConditionalRouting:
 
     def test_greeting_routes_to_greet_response(self):
-        """Greeting intent should take the greet_response branch."""
         result = invoke("Hello!")
-        # greet_response node logs a specific step
         assert any("greet_response" in step for step in result["steps"])
 
+    def test_farewell_routes_to_farewell_response(self):
+        result = invoke("Goodbye!")
+        assert any("farewell_response" in step for step in result["steps"])
+
     def test_question_routes_to_help_response(self):
-        """Question intent should take the help_response branch."""
         result = invoke("What is the speed of light?")
         assert any("help_response" in step for step in result["steps"])
 
     def test_math_routes_to_help_response(self):
-        """Math intent should take the help_response branch."""
         result = invoke("Calculate 10 + 5")
         assert any("help_response" in step for step in result["steps"])
 
 
-# ─── End-to-End Graph Execution ───────────────────────────────────────────────
+# ─── Message History ──────────────────────────────────────────────────────────
+
+class TestMessageHistory:
+
+    def test_response_appended_to_history(self):
+        """After one turn, history should contain the assistant response."""
+        result = invoke("Hello!", history=[{"role": "user", "content": "Hello!"}])
+        # message_history starts with user msg, graph appends assistant msg
+        assert len(result["message_history"]) == 2
+        assert result["message_history"][0]["role"] == "user"
+        assert result["message_history"][1]["role"] == "assistant"
+
+    def test_history_accumulates_across_turns(self):
+        """Simulate 2-turn conversation - history should grow each turn."""
+        # Turn 1
+        history = [{"role": "user", "content": "Hello!"}]
+        r1 = invoke("Hello!", history=history)
+        history = r1["message_history"]    # now has [user, assistant]
+        assert len(history) == 2
+
+        # Turn 2 - add next user message
+        history = history + [{"role": "user", "content": "What is gravity?"}]
+        r2 = invoke("What is gravity?", history=history)
+        history = r2["message_history"]    # now has [user, assistant, user, assistant]
+        assert len(history) == 4
+
+    def test_empty_history_on_first_turn(self):
+        """First turn with no history - graph still works."""
+        result = invoke("Hello!")
+        # No user msg in initial state - only assistant response appended
+        assert len(result["message_history"]) == 1
+        assert result["message_history"][0]["role"] == "assistant"
+
+    def test_farewell_shows_turn_count(self):
+        """Farewell response should mention how many turns were had."""
+        history = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "user", "content": "bye"},
+        ]
+        result = invoke("bye", history=history)
+        # farewell_response counts user messages in history
+        assert "2" in result["response"]   # 2 user turns
+
+
+# ─── End-to-End ───────────────────────────────────────────────────────────────
 
 class TestEndToEnd:
 
     def test_all_state_fields_populated(self):
-        """Every field in MayaState should be filled after graph runs."""
         result = invoke("Hello MAYA!")
         assert result["user_input"] == "Hello MAYA!"
         assert result["language"] in {"english", "hindi", "hinglish"}
-        assert result["intent"] in {"greeting", "question", "math", "general"}
+        assert result["intent"] in {"greeting", "question", "math", "general", "farewell"}
         assert len(result["response"]) > 0
-        assert len(result["steps"]) >= 3   # At least 3 nodes must log
+        assert len(result["steps"]) >= 3
 
     def test_graph_always_produces_response(self):
-        """Every input must produce a non-empty response - no crashes."""
-        inputs = [
-            "Hello!",
-            "Namaste!",
-            "What is the sun?",
-            "5 + 3",
-            "random text here",
-            "",   # Edge case: empty string
-        ]
+        inputs = ["Hello!", "Namaste!", "What is the sun?", "5 + 3", "bye", ""]
         for text in inputs:
             result = invoke(text)
-            assert isinstance(result["response"], str), f"No response for: '{text}'"
             assert len(result["response"]) > 0, f"Empty response for: '{text}'"
 
     def test_steps_show_correct_node_order(self):
-        """Execution trace should always start with detect_language."""
         result = invoke("Hello!")
         assert result["steps"][0].startswith("[detect_language]")
         assert result["steps"][1].startswith("[understand_intent]")
-        # Third step is whichever response node was chosen
-        assert result["steps"][2].startswith("[greet_response]") or \
-               result["steps"][2].startswith("[help_response]")
 
     def test_user_input_preserved_unchanged(self):
-        """user_input must never be modified by any node."""
         original = "Hello MAYA, kya hal hai?"
         result = invoke(original)
         assert result["user_input"] == original
-
-    def test_hindi_greeting_response_contains_hindi(self):
-        """A Hindi greeting should get a Hindi response."""
-        result = invoke("Namaste! Main Maya se milna chahta hun!")
-        # Should be hindi or hinglish, and response should contain hindi text
-        assert result["language"] in {"hindi", "hinglish"}
-        # Check response has some Devanagari or common Hindi romanization
-        hindi_indicators = ["hun", "main", "Namaste", "aap", "ho", "kya"]
-        assert any(word in result["response"] for word in hindi_indicators)

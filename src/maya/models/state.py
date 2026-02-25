@@ -17,13 +17,26 @@ A: Each node returns a PARTIAL dict (only the keys it changed).
    Example: a node that only detects language returns {"language": "hindi"}
             LangGraph keeps all other state keys unchanged.
 
-Q: What is Annotated[list, operator.add] for?
-A: It's a special LangGraph pattern for lists you want to ACCUMULATE instead
-   of REPLACE. Used for message history in chat apps. Not needed here yet,
-   but you'll see it in LangGraph docs - now you know what it means!
+Q: What is Annotated[list, operator.add]?  ← NEW CONCEPT (Session 2)
+A: It's a LangGraph REDUCER - it tells LangGraph HOW to merge a key
+   when a node returns it.
+
+   Without Annotated (normal):
+     existing: ["item1", "item2"]
+     node returns: ["item3"]
+     result: ["item3"]         ← REPLACES the whole list!
+
+   With Annotated[list, operator.add]:
+     existing: ["item1", "item2"]
+     node returns: ["item3"]
+     result: ["item1", "item2", "item3"]  ← APPENDS! (operator.add on lists = concatenate)
+
+   This is how LangGraph chat apps accumulate message history across nodes.
+   We pass the accumulated history into each new graph invocation (each conversation turn).
 """
 
-from typing import TypedDict
+import operator
+from typing import Annotated, TypedDict
 
 
 class MayaState(TypedDict):
@@ -33,20 +46,26 @@ class MayaState(TypedDict):
     Every node in the graph receives this full state object and returns
     a dict containing only the keys it updated.
 
-    Fields are ordered by the flow of data through the graph:
-    Input → Processing → Output → Debug
+    Fields ordered by flow: Input → Processing → Output → Memory → Debug
     """
 
-    # ── Input (set before graph starts) ──────────────────────────────────────
-    user_input: str          # Raw text from user (voice → Whisper → text later)
+    # ── Input (set fresh each conversation turn) ──────────────────────────────
+    user_input: str          # Raw text from user (voice → Whisper → text, Week 2)
 
     # ── Processing results (filled by nodes as graph runs) ────────────────────
     language: str            # Detected: "english" | "hindi" | "hinglish"
-    intent: str              # Detected: "greeting" | "question" | "math" | "general"
+    intent: str              # Detected: "greeting" | "question" | "math" |
+                             #           "general"  | "farewell"  ← NEW
 
     # ── Output (set by the final response node) ────────────────────────────────
     response: str            # MAYA's reply to the user
 
+    # ── Conversation Memory ────────────────────────────────────────────────────
+    # Annotated[list[dict], operator.add] = REDUCER
+    # When a node returns {"message_history": [new_msg]}, LangGraph
+    # APPENDS new_msg to the existing list instead of replacing it.
+    # The REPL passes the accumulated history into each new turn.
+    message_history: Annotated[list[dict], operator.add]
+
     # ── Debug / Learning visibility ────────────────────────────────────────────
     steps: list[str]         # Log entry from each node - shows graph execution flow
-                             # Remove or make optional once you understand the flow

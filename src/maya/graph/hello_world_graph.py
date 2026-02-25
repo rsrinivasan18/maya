@@ -1,43 +1,40 @@
 """
-MAYA Hello World - First LangGraph Agent
-=========================================
-Week 1 deliverable: a working LangGraph graph with 4 nodes and 1 conditional edge.
-No LLM required - pure Python rule-based logic so you can focus on graph structure.
+MAYA Conversation Graph - Session 2 Update
+===========================================
+Session 1: Hello world - 4 nodes, 1 conditional edge, batch demo
+Session 2: Added farewell intent + message history recording
 
-WHAT THIS FILE TEACHES (read before running):
-----------------------------------------------
+NEW CONCEPTS THIS SESSION:
+---------------------------
+1. Annotated[list, operator.add] REDUCER
+   Response nodes now append to message_history instead of replacing it.
+   LangGraph merges {"message_history": [new_msg]} by ADDING to existing list.
 
-1. STATEGRAPH  - The container that holds nodes and edges (the "circuit board")
-2. STATE       - TypedDict flowing through nodes like a baton in a relay race
-3. NODE        - A plain Python function: receives full state, returns partial dict
-4. EDGE        - A directed connection from one node to the next
-5. CONDITIONAL EDGE - A routing function that picks which node to go to next
-                      This is what makes LangGraph powerful!
-6. COMPILE     - Validates the graph structure and locks it for execution
-7. INVOKE      - Runs the graph from START to END with an initial state
+2. FAREWELL INTENT
+   A new branch in the conditional edge:
+   - "farewell" → farewell_response node
+   - The REPL uses this to know when to exit the loop
 
-GRAPH FLOW:
------------
+3. MULTI-TURN CONVERSATION PATTERN
+   The REPL (chat_loop.py) carries message_history between turns:
+     Turn 1: invoke({..., "message_history": [user_msg_1]})
+             → history grows to [user_msg_1, assistant_msg_1]
+     Turn 2: invoke({..., "message_history": [user_msg_1, assistant_msg_1, user_msg_2]})
+             → history grows to [..., user_msg_2, assistant_msg_2]
+
+UPDATED GRAPH FLOW:
+-------------------
     START
       ↓
-  [detect_language]       Node 1: Is it Hindi / English / Hinglish?
+  [detect_language]       Node 1: Hindi / English / Hinglish?
       ↓
-  [understand_intent]     Node 2: Greeting? Question? Math?
+  [understand_intent]     Node 2: Greeting / Question / Math / Farewell / General?
       ↓
-  [route_by_intent]  ──── CONDITIONAL EDGE (the key LangGraph concept!)
-      ↓              ↓
- [greet_response]  [help_response]    Node 3a / 3b: Different paths!
-      ↓              ↓
-     END            END
-
-WHY CONDITIONAL EDGES MATTER FOR MAYA:
----------------------------------------
-This simple greeting/help split is the prototype for MAYA's Intent Router Agent,
-which will eventually route to:
-  - Offline local LLM  (fast, free, private) for simple questions
-  - Sarvam API / Claude (richer, bilingual)   for complex STEM explanations
-  - Math Tutor Agent                           for math problems
-  - Story Agent                                for storytelling requests
+  [route_by_intent]  ──── CONDITIONAL EDGE (now 3-way!)
+      ↓         ↓         ↓
+ [greet]    [farewell]  [help]
+      ↓         ↓         ↓
+     END       END       END
 """
 
 from langgraph.graph import StateGraph, END, START
@@ -47,13 +44,6 @@ from src.maya.models.state import MayaState
 
 # =============================================================================
 # NODES
-# Each node is a plain Python function with this signature:
-#   def node_name(state: MayaState) -> dict:
-#
-# Rules:
-#   - Receive the FULL current state as input
-#   - Return ONLY a dict of the keys you changed (LangGraph merges the rest)
-#   - Never mutate the state dict directly - always return a new dict
 # =============================================================================
 
 
@@ -67,12 +57,12 @@ def detect_language(state: MayaState) -> dict:
     user_input = state["user_input"].lower()
     current_steps = state["steps"]
 
-    # Common Hindi words that appear even in Hinglish sentences
     hindi_markers = {
         "namaste", "namaskar", "kya", "hai", "hain", "nahi", "haan",
         "karo", "kuch", "mujhe", "tumhe", "aap", "tum", "main", "mera",
         "tera", "uska", "bahut", "accha", "theek", "kyun", "kaise",
         "kaun", "kab", "kahaan", "batao", "samjhao", "seekhna", "chahte",
+        "alvida", "phir", "milenge", "shukriya", "dhanyavaad",
     }
 
     words_in_input = set(user_input.split())
@@ -85,11 +75,10 @@ def detect_language(state: MayaState) -> dict:
     else:
         language = "english"
 
-    # Return ONLY the keys this node updates (LangGraph merges the rest)
     return {
         "language": language,
         "steps": current_steps + [
-            f"[detect_language] → '{language}' (found {hindi_count} Hindi marker(s))"
+            f"[detect_language] → '{language}' ({hindi_count} Hindi marker(s))"
         ],
     }
 
@@ -98,16 +87,20 @@ def understand_intent(state: MayaState) -> dict:
     """
     Node 2: Understand what the user wants.
 
-    This is the prototype of MAYA's Intent Router Agent.
-    Today: rule-based matching.
-    Week 4 upgrade: Small local classifier or LLM-based routing.
+    Updated: Added farewell detection (bye/goodbye/alvida/phir milenge).
+    Precedence: farewell > greeting > math > question > general
     """
     user_input = state["user_input"].lower()
     current_steps = state["steps"]
 
+    farewell_words = {
+        "bye", "goodbye", "good bye", "see you", "later", "cya",
+        "alvida", "phir milenge", "tata", "good night", "goodnight",
+        "band karo", "exit", "quit", "stop",
+    }
     greeting_words = {
         "hello", "hi", "hey", "namaste", "namaskar",
-        "good morning", "good evening", "good night", "sup",
+        "good morning", "good evening", "sup",
     }
     math_words = {
         "calculate", "solve", "math", "add", "subtract", "multiply", "divide",
@@ -119,8 +112,10 @@ def understand_intent(state: MayaState) -> dict:
         "kaun", "batao", "samjhao",
     }
 
-    # Precedence: greeting > math > question > general
-    if any(word in user_input for word in greeting_words):
+    # Farewell takes highest precedence - it exits the conversation
+    if any(word in user_input for word in farewell_words):
+        intent = "farewell"
+    elif any(word in user_input for word in greeting_words):
         intent = "greeting"
     elif any(word in user_input for word in math_words):
         intent = "math"
@@ -137,9 +132,10 @@ def understand_intent(state: MayaState) -> dict:
 
 def greet_response(state: MayaState) -> dict:
     """
-    Node 3a: Generate a warm greeting in the detected language.
+    Node 3a: Warm greeting in the detected language.
 
-    MAYA's personality: enthusiastic, warm, bilingual, encouraging.
+    NEW: Returns message_history entry.
+    Annotated[list, operator.add] means LangGraph APPENDS this to existing history.
     """
     language = state["language"]
     current_steps = state["steps"]
@@ -166,31 +162,63 @@ def greet_response(state: MayaState) -> dict:
 
     return {
         "response": response,
-        "steps": current_steps + [
-            f"[greet_response] → Greeting generated in '{language}'"
-        ],
+        # Annotated reducer: LangGraph will ADD this single-item list
+        # to the existing message_history (passed in from the REPL)
+        "message_history": [{"role": "assistant", "content": response}],
+        "steps": current_steps + [f"[greet_response] → greeting in '{language}'"],
+    }
+
+
+def farewell_response(state: MayaState) -> dict:
+    """
+    Node 3b: Warm goodbye in the detected language. NEW in Session 2.
+
+    The REPL checks intent == "farewell" to break the conversation loop.
+    """
+    language = state["language"]
+    current_steps = state["steps"]
+    turn_count = len([m for m in state["message_history"] if m["role"] == "user"])
+
+    farewells = {
+        "english": (
+            f"Goodbye! It was wonderful talking with you today ({turn_count} turns).\n"
+            "Come back whenever you want to learn something new! See you soon!"
+        ),
+        "hindi": (
+            f"Alvida! Aaj aapse baat karke bahut accha laga ({turn_count} turns).\n"
+            "Jab bhi kuch seekhna ho, wapas aana! Phir milenge!"
+        ),
+        "hinglish": (
+            f"Goodbye! Aaj bahut maza aaya tumse baat karke ({turn_count} turns).\n"
+            "Kuch bhi seekhna ho toh wapas aana! Phir milenge!"
+        ),
+    }
+
+    response = farewells.get(language, farewells["english"])
+
+    return {
+        "response": response,
+        "message_history": [{"role": "assistant", "content": response}],
+        "steps": current_steps + [f"[farewell_response] → goodbye in '{language}'"],
     }
 
 
 def help_response(state: MayaState) -> dict:
     """
-    Node 3b: Generate a helpful response for questions, math, or general chat.
+    Node 3c: Helpful response for questions, math, or general chat.
 
-    Week 1: Placeholder responses that hint at what's coming.
-    Week 3 upgrade: Replace with actual Sarvam/Ollama LLM calls.
-    Week 4 upgrade: Route math intent to dedicated Math Tutor Agent.
+    Week 3 upgrade: Replace template strings with actual Sarvam/Ollama LLM call.
     """
     intent = state["intent"]
     language = state["language"]
     current_steps = state["steps"]
 
-    # Response templates per intent and language
     templates = {
         "math": {
             "english": (
                 "Ooh, a math problem! Numbers are my superpower!\n"
                 "Full math solving with step-by-step explanations is coming in Week 4.\n"
-                "For now, try me on: 'What is algebra?' or 'Explain fractions'!"
+                "For now, try: 'What is algebra?' or 'Explain fractions'!"
             ),
             "hindi": (
                 "Arre waah, math ka sawaal! Numbers meri favourite hain!\n"
@@ -223,15 +251,15 @@ def help_response(state: MayaState) -> dict:
         "general": {
             "english": (
                 "Got it! I'm MAYA, your STEM learning companion.\n"
-                "Try asking me: 'Hello', 'What is gravity?', or 'Calculate 5 + 3'!"
+                "Try: 'Hello', 'What is gravity?', 'Calculate 5 + 3', or 'Bye'!"
             ),
             "hindi": (
                 "Samjha! Main MAYA hun, aapka STEM saathi.\n"
-                "Try karo: 'Namaste', 'Gravity kya hai?', ya '5 + 3 calculate karo'!"
+                "Try karo: 'Namaste', 'Gravity kya hai?', ya '5+3 calculate karo'!"
             ),
             "hinglish": (
                 "Okay! Main MAYA hun - tumhara STEM companion.\n"
-                "Try karo: 'Hello', 'What is gravity?', ya 'Calculate 5 + 3'!"
+                "Try karo: 'Hello', 'What is gravity?', ya 'Calculate 5+3'!"
             ),
         },
     }
@@ -241,89 +269,81 @@ def help_response(state: MayaState) -> dict:
 
     return {
         "response": response,
+        "message_history": [{"role": "assistant", "content": response}],
         "steps": current_steps + [
-            f"[help_response] → Response for intent='{intent}', language='{language}'"
+            f"[help_response] → intent='{intent}', language='{language}'"
         ],
     }
 
 
 # =============================================================================
-# ROUTING FUNCTION (Conditional Edge)
-# This function is called by LangGraph after understand_intent.
-# It returns the NAME of the next node as a string.
-#
-# This is the heart of MAYA's future Intent Router Agent!
-# Today: greeting vs everything else.
-# Week 4: will route to Math Tutor, Story Agent, Vocabulary Agent, etc.
+# ROUTING FUNCTION
+# Now 3-way: greeting | farewell | everything else
 # =============================================================================
 
 
 def route_by_intent(state: MayaState) -> str:
     """
-    Routing function: decides which response node to call.
+    Routing function: 3-way split on intent.
 
-    Returns a string that must match one of the keys in the
-    conditional_edge mapping defined below.
+    Returns a string matching one of the conditional_edge keys below.
+    This grows over time - Week 4 adds math_tutor, story, vocabulary routes.
     """
     intent = state.get("intent", "general")
 
     if intent == "greeting":
-        return "greet_response"   # → Node 3a
+        return "greet_response"
+    elif intent == "farewell":
+        return "farewell_response"
     else:
-        return "help_response"    # → Node 3b (math, question, general)
+        return "help_response"
 
 
 # =============================================================================
 # GRAPH ASSEMBLY
-# Wire the nodes and edges together, then compile.
-# Think of this like building a flowchart:
-#   - Nodes are the boxes
-#   - Edges are the arrows
 # =============================================================================
 
 
-def build_hello_world_graph():
+def build_conversation_graph():
     """
-    Assembles and compiles MAYA's hello world LangGraph.
+    Assembles MAYA's conversation graph (Session 2 version).
 
-    Returns a compiled graph ready to call .invoke() on.
+    Changes from Session 1:
+    - Added farewell_response node
+    - route_by_intent is now 3-way
+    - Response nodes now write to message_history
     """
-
-    # Step 1: Create the graph container
-    # StateGraph takes our state type so it knows what data flows through
     graph = StateGraph(MayaState)
 
-    # Step 2: Register nodes
-    # Each node is a (name, function) pair
+    # Register nodes
     graph.add_node("detect_language", detect_language)
     graph.add_node("understand_intent", understand_intent)
     graph.add_node("greet_response", greet_response)
+    graph.add_node("farewell_response", farewell_response)   # NEW
     graph.add_node("help_response", help_response)
 
-    # Step 3: Add edges (fixed - always go to the next node)
+    # Fixed edges
     graph.add_edge(START, "detect_language")
     graph.add_edge("detect_language", "understand_intent")
 
-    # Step 4: Add conditional edge
-    # After understand_intent runs, call route_by_intent() to decide where to go.
-    # The dict maps return values → node names.
+    # Conditional edge - now 3-way
     graph.add_conditional_edges(
-        "understand_intent",          # Source node
-        route_by_intent,              # Routing function
+        "understand_intent",
+        route_by_intent,
         {
-            "greet_response": "greet_response",   # If routing fn returns this → go here
-            "help_response": "help_response",     # If routing fn returns this → go here
+            "greet_response":    "greet_response",
+            "farewell_response": "farewell_response",   # NEW
+            "help_response":     "help_response",
         },
     )
 
-    # Step 5: Both response nodes lead to END
+    # All response nodes lead to END
     graph.add_edge("greet_response", END)
+    graph.add_edge("farewell_response", END)             # NEW
     graph.add_edge("help_response", END)
 
-    # Step 6: Compile - validates structure, prepares for execution
-    # If you have errors (disconnected nodes, missing edges), compile() will tell you.
     return graph.compile()
 
 
-# Module-level compiled graph - import this to use MAYA
-maya_graph = build_hello_world_graph()
+# Module-level compiled graph
+maya_graph = build_conversation_graph()
