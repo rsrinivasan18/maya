@@ -18,10 +18,21 @@ MODELS (downloaded automatically on first use from HuggingFace):
   "small"  ~465MB  - Better Hindi accuracy, slower
   "medium" ~1.5GB  - Best accuracy, needs 4GB+ RAM
 
-LANGUAGE DETECTION:
--------------------
-  language=None → Whisper auto-detects the language each turn
-  This handles Hinglish naturally - Srinika can switch mid-conversation.
+LANGUAGE DETECTION - BILINGUAL STRATEGY:
+-----------------------------------------
+  Known Whisper bug: Hindi speech is frequently misdetected as Arabic ("ar"),
+  Farsi ("fa"), or Urdu ("ur") because their phonetics overlap significantly.
+
+  Fix: Always try Hindi ("hi") first. If Hindi confidence < threshold (0.65),
+  retry with English ("en") and return whichever scored higher.
+
+  This means:
+  - Pure Hindi  → Hindi pass succeeds (high confidence) → returned
+  - Pure English → Hindi pass has low confidence → English retry wins
+  - Hinglish    → Hindi pass usually wins (Hindi is the base language)
+
+  language=None in __init__ activates this bilingual mode (recommended).
+  language="hi" or "en" forces a single-pass with that language only.
 
 LEARNING NOTE - What is VAD?
 ------------------------------
@@ -32,6 +43,10 @@ speaking vs just silence/background noise.
 """
 
 import numpy as np
+
+# If Hindi transcription confidence is below this, also try English.
+# 0.65 is a good balance - confident Hindi stays Hindi, ambiguous gets retried.
+_HINDI_CONFIDENCE_THRESHOLD = 0.65
 
 
 class STTEngine:
@@ -77,7 +92,8 @@ class STTEngine:
         self._language = language
         self._sample_rate = 16000   # Whisper requires exactly 16kHz input
 
-        print(f"  STT ready. Auto-detect language: {language is None}")
+        mode = "bilingual (Hindi→English fallback)" if language is None else f"forced '{language}'"
+        print(f"  STT ready. Language mode: {mode}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # CORE METHODS
@@ -109,30 +125,66 @@ class STTEngine:
 
         return audio.flatten()    # (N, 1) → (N,) - whisper expects 1D
 
+    def _transcribe_once(self, audio: np.ndarray, language: str | None) -> tuple[str, float]:
+        """
+        Single transcription pass with a specific language.
+
+        Args:
+            audio:    float32 numpy array at 16kHz
+            language: "hi", "en", or None for auto-detect
+
+        Returns:
+            (text, language_probability)
+            language_probability is how confident Whisper was (0.0 - 1.0)
+        """
+        segments, info = self._model.transcribe(
+            audio,
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+        # Consume the generator (faster-whisper is lazy)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        return text, info.language_probability
+
     def transcribe(self, audio: np.ndarray) -> str:
         """
-        Transcribe a numpy audio array to text.
+        Bilingual transcription: Hindi first, English fallback.
+
+        Fixes Whisper's known bug where Hindi is misdetected as Arabic:
+          - Always runs Hindi pass first (language="hi")
+          - If Hindi confidence < _HINDI_CONFIDENCE_THRESHOLD (0.65):
+              → also runs English pass (language="en")
+              → returns whichever scored higher confidence
+
+        If self._language is set (forced mode), does a single pass only.
 
         Args:
             audio: float32 numpy array at 16kHz (from record_audio)
 
         Returns:
-            Transcribed text. Empty string if nothing was detected.
+            Transcribed text string. Empty string if nothing detected.
         """
-        segments, info = self._model.transcribe(
-            audio,
-            language=self._language,        # None = auto-detect each call
-            beam_size=5,                    # Higher = more accurate, slower
-            vad_filter=True,                # Skip silence automatically
-            vad_parameters={
-                "min_silence_duration_ms": 500,   # 0.5s silence = end of speech
-            },
-        )
+        # Forced language mode - single pass, no fallback
+        if self._language is not None:
+            text, _ = self._transcribe_once(audio, self._language)
+            return text
 
-        # segments is a generator - iterate to collect all text
-        # (faster-whisper returns segments lazily for memory efficiency)
-        text_parts = [segment.text.strip() for segment in segments]
-        return " ".join(text_parts).strip()
+        # Bilingual mode: Hindi first (avoids Arabic misdetection)
+        hi_text, hi_conf = self._transcribe_once(audio, "hi")
+
+        if hi_conf >= _HINDI_CONFIDENCE_THRESHOLD:
+            # Confident Hindi (or Hinglish) - return it
+            return hi_text
+
+        # Hindi confidence low - also try English
+        en_text, en_conf = self._transcribe_once(audio, "en")
+
+        # Return whichever the model is more confident about
+        if en_conf > hi_conf:
+            return en_text
+        return hi_text
 
     def listen(self, duration: int = 5) -> str:
         """
