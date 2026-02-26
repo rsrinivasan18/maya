@@ -1,6 +1,6 @@
 # 🤖 MAYA - Multi-Agent hYbrid Assistant
 ## Master Project Context Document
-### Version: 2.1 | Updated: 2026-02-25 | Status: Active Development - Week 1
+### Version: 2.2 | Updated: 2026-02-26 | Status: Active Development - Week 1
 
 ---
 
@@ -192,17 +192,23 @@ Reasons:
 - ✅ GitHub repo created: github.com/rsrinivasan18/maya
 - ✅ 2 commits pushed under Srinivasan's name
 
-### Tomorrow Evening - 2026-02-26 (Thursday)
-- [ ] Morning: Run `python run_hello_world.py` + `pytest tests/ -v` - verify all passing
-- [ ] Morning: Read `src/maya/graph/hello_world_graph.py` fully - understand every line
-- [ ] Evening: Build interactive chat loop REPL (`chat_loop.py`) with message history
-- [ ] Evening: Add `farewell` intent + node (bye/goodbye/alvida)
-- [ ] Evening (if time): Integrate Ollama LLM to replace rule-based responses
-- [ ] Commit: `feat: MAYA interactive chat loop with message history`
+### Session 2 - 2026-02-26 (COMPLETED)
+- ✅ `Annotated[list, operator.add]` reducer added to MayaState for message_history
+- ✅ Farewell intent + node (bye/quit/exit/alvida/phir milenge) - 3-way routing
+- ✅ `chat_loop.py` REPL - real multi-turn conversation with !history/!debug/!clear
+- ✅ Tests updated - farewell + message history accumulation tests added
+- ✅ Committed and pushed to GitHub
+
+### Next Session (Option 2 - Ollama LLM)
+- [ ] `pip install ollama` + `ollama pull llama3.2:3b`
+- [ ] Replace `help_response` node body with real `ollama.chat()` call
+- [ ] Add bilingual system prompt (MAYA's personality in Hindi/English)
+- [ ] MAYA becomes actually intelligent - same graph, smarter node
+- [ ] Commit: `feat: integrate Ollama LLM for real AI responses`
 
 ### This Week
 - [ ] LangGraph Academy modules (office GenAI time)
-- [ ] By Friday: MAYA holding a real multi-turn conversation in terminal
+- [ ] Run `python chat_loop.py` and have a real conversation with MAYA
 
 ### Next Weekend
 - [ ] Buy RPi5 + AI HAT+ 2 from Sim Lim Square
@@ -255,10 +261,9 @@ Build it following the architecture defined."
 
 ### In Progress
 - 🔄 LangGraph learning (Academy modules - office time)
-- 🔄 Interactive chat loop with message history (tomorrow evening)
 
 ### Pending
-- ⏳ Ollama LLM integration (real AI responses)
+- ⏳ Ollama LLM integration (real AI responses) ← next session
 - ⏳ Whisper STT (Week 2)
 - ⏳ Piper TTS (Week 2)
 - ⏳ Hardware purchase (RPi5 + AI HAT+ 2)
