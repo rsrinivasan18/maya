@@ -1,6 +1,6 @@
 # MAYA - Multi-Agent hYbrid Assistant
 # Python dependencies
-# Updated: 2026-02-25
+# Updated: 2026-02-27
 
 # ─── Core: LangGraph & LangChain ───────────────────────────────────────────────
 langgraph>=0.2.0
@@ -23,9 +23,13 @@ pytest>=8.0.0
 # ─── Week 3: Sarvam AI (Hindi/English bilingual model) ─────────────────────────
 # sarvam-python                  # Check PyPI for official package name
 
-# ─── Week 2: Voice I/O (uncomment when ready) ──────────────────────────────────
-# openai-whisper                 # STT - local Whisper model
-# piper-tts                      # TTS - offline text-to-speech
+# ─── Week 2: Speech-to-Text ────────────────────────────────────────────────────
+faster-whisper>=1.0.0          # STT - 4x faster than openai-whisper, int8 on CPU
+sounddevice>=0.4.6             # Microphone recording (bundles PortAudio on Windows)
+numpy>=1.24.0                  # Audio array handling
+
+# ─── Week 2: Text-to-Speech (uncomment when ready) ─────────────────────────────
+# piper-tts                      # TTS - offline, fast, Hindi voices available
 
 # ─── Phase 2: Web Backend (uncomment when ready) ───────────────────────────────
 # fastapi>=0.115.0

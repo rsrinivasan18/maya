@@ -1,11 +1,14 @@
 """
-MAYA Interactive Chat Loop - Session 2
-========================================
+MAYA Interactive Chat Loop - Session 3 Update
+==============================================
 Run this to have a real multi-turn conversation with MAYA.
 
 Usage:
-    python chat_loop.py
-    python chat_loop.py --debug      # Show graph execution trace each turn
+    python chat_loop.py                          # Keyboard input
+    python chat_loop.py --voice                  # Microphone input (Srinika speaks!)
+    python chat_loop.py --voice --record-time 7  # Longer recording window
+    python chat_loop.py --debug                  # Show graph trace each turn
+    python chat_loop.py --voice --debug          # Both
 
 HOW MULTI-TURN CONVERSATION WORKS:
 ------------------------------------
@@ -18,11 +21,17 @@ Each time you type something, this REPL:
   5. We save the updated history for the next turn
   6. If intent == "farewell" → break the loop
 
-SPECIAL COMMANDS:
+SPECIAL COMMANDS (keyboard mode only):
   !history    - Show the full conversation so far
   !debug      - Toggle graph execution trace on/off
   !clear      - Clear conversation history and start fresh
   bye / quit / exit / alvida  → Ends the conversation
+
+VOICE MODE NOTES:
+  - Srinika speaks for the duration set by --record-time (default 5 seconds)
+  - The transcribed text is shown so she can see what MAYA heard
+  - If nothing is heard, she gets another chance automatically
+  - Hindi, English, and Hinglish all work (Whisper auto-detects)
 
 WHAT'S NEXT (Week 3 upgrade):
   Replace rule-based responses with Ollama LLM call inside help_response node.
@@ -47,14 +56,16 @@ console = Console()
 # DISPLAY HELPERS
 # =============================================================================
 
-def print_header() -> None:
+def print_header(voice_mode: bool = False) -> None:
+    mode_line = "Voice mode ON  |  Speak when prompted" if voice_mode else \
+                "Type 'bye' or 'alvida' to exit  |  '!history' to review  |  '!debug' to toggle trace"
     console.print(
         Panel.fit(
             Text.assemble(
                 ("MAYA\n", "bold magenta"),
                 ("Multi-Agent hYbrid Assistant\n", "magenta"),
-                ("Session 2 - Interactive Chat Loop\n", "dim"),
-                ("Type 'bye' or 'alvida' to exit  |  '!history' to review  |  '!debug' to toggle trace", "dim"),
+                ("Session 3 - Voice + Chat Loop\n", "dim"),
+                (mode_line, "dim"),
             ),
             border_style="magenta",
         )
@@ -122,47 +133,95 @@ def print_summary(history: list[dict], turn_count: int) -> None:
 # MAIN CHAT LOOP
 # =============================================================================
 
-def run_chat(debug: bool = False) -> None:
+def run_chat(debug: bool = False, voice: bool = False, record_time: int = 5) -> None:
     """
     The main REPL loop.
 
+    Args:
+        debug:       Show graph execution trace each turn
+        voice:       Use microphone instead of keyboard
+        record_time: Recording duration in seconds (voice mode only)
+
     State carried between turns:
       - message_history: list of {"role": "user"|"assistant", "content": str}
-      - debug: bool (toggleable with !debug command)
+      - debug: bool (toggleable with !debug command in keyboard mode)
     """
-    print_header()
+    print_header(voice_mode=voice)
+
+    # ── Set up STT if voice mode ───────────────────────────────────────────────
+    stt = None
+    if voice:
+        from src.maya.stt.transcriber import STTEngine
+
+        if not STTEngine.is_available():
+            console.print(
+                "[bold red]No microphone detected![/bold red]\n"
+                "Check your mic is plugged in, then try again.\n"
+                "Running in keyboard mode instead."
+            )
+            voice = False
+        else:
+            stt = STTEngine(model_size="base")
+            console.print(
+                f"[green]Microphone ready.[/green] "
+                f"[dim]Recording {record_time}s per turn. "
+                f"Say 'alvida' or 'bye' to exit.[/dim]\n"
+            )
 
     message_history: list[dict] = []
     turn_count = 0
     show_debug = debug
 
     while True:
-        # ── Get user input ────────────────────────────────────────────────────
-        try:
-            user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Interrupted. Goodbye![/dim]")
-            break
+        # ── Get user input: voice OR keyboard ─────────────────────────────────
+        if voice and stt:
+            try:
+                console.print(
+                    f"[bold yellow]Srinika, speak now "
+                    f"({record_time} seconds)...[/bold yellow]"
+                )
+                user_input = stt.listen(duration=record_time)
 
-        if not user_input:
-            continue
+                if not user_input:
+                    console.print("[dim]Nothing heard. Please try again.[/dim]")
+                    continue
 
-        # ── Handle special REPL commands ──────────────────────────────────────
-        if user_input.lower() == "!history":
-            print_history(message_history)
-            continue
+                # Show what was heard so Srinika can confirm
+                console.print(f"[bold cyan]You (heard):[/bold cyan] {user_input}")
 
-        if user_input.lower() == "!debug":
-            show_debug = not show_debug
-            status = "ON" if show_debug else "OFF"
-            console.print(f"[dim]Graph trace: {status}[/dim]")
-            continue
+            except RuntimeError as e:
+                console.print(f"[red]Mic error: {e}[/red]")
+                continue
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Interrupted. Goodbye![/dim]")
+                break
+        else:
+            # Keyboard mode
+            try:
+                user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Interrupted. Goodbye![/dim]")
+                break
 
-        if user_input.lower() == "!clear":
-            message_history = []
-            turn_count = 0
-            console.print("[dim]History cleared. Fresh start![/dim]")
-            continue
+            if not user_input:
+                continue
+
+            # Special commands only available in keyboard mode
+            if user_input.lower() == "!history":
+                print_history(message_history)
+                continue
+
+            if user_input.lower() == "!debug":
+                show_debug = not show_debug
+                status = "ON" if show_debug else "OFF"
+                console.print(f"[dim]Graph trace: {status}[/dim]")
+                continue
+
+            if user_input.lower() == "!clear":
+                message_history = []
+                turn_count = 0
+                console.print("[dim]History cleared. Fresh start![/dim]")
+                continue
 
         # ── Build state for this turn ─────────────────────────────────────────
         turn_count += 1
@@ -218,6 +277,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Show graph execution trace for every turn",
     )
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Use microphone input instead of keyboard (Srinika speaks!)",
+    )
+    parser.add_argument(
+        "--record-time",
+        type=int,
+        default=5,
+        dest="record_time",
+        help="Recording duration in seconds for voice mode (default: 5)",
+    )
     args = parser.parse_args()
 
-    run_chat(debug=args.debug)
+    run_chat(debug=args.debug, voice=args.voice, record_time=args.record_time)
