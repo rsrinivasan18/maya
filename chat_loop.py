@@ -4,11 +4,12 @@ MAYA Interactive Chat Loop - Session 3 Update
 Run this to have a real multi-turn conversation with MAYA.
 
 Usage:
-    python chat_loop.py                          # Keyboard input
+    python chat_loop.py                          # Keyboard input, text output
+    python chat_loop.py --speak                  # MAYA speaks her responses (TTS)
     python chat_loop.py --voice                  # Microphone input (Srinika speaks!)
+    python chat_loop.py --voice --speak          # Full voice conversation!
     python chat_loop.py --voice --record-time 7  # Longer recording window
     python chat_loop.py --debug                  # Show graph trace each turn
-    python chat_loop.py --voice --debug          # Both
 
 HOW MULTI-TURN CONVERSATION WORKS:
 ------------------------------------
@@ -133,13 +134,19 @@ def print_summary(history: list[dict], turn_count: int) -> None:
 # MAIN CHAT LOOP
 # =============================================================================
 
-def run_chat(debug: bool = False, voice: bool = False, record_time: int = 5) -> None:
+def run_chat(
+    debug: bool = False,
+    voice: bool = False,
+    speak: bool = False,
+    record_time: int = 5,
+) -> None:
     """
     The main REPL loop.
 
     Args:
         debug:       Show graph execution trace each turn
-        voice:       Use microphone instead of keyboard
+        voice:       Use microphone instead of keyboard (STT)
+        speak:       MAYA speaks her responses aloud (TTS)
         record_time: Recording duration in seconds (voice mode only)
 
     State carried between turns:
@@ -147,6 +154,16 @@ def run_chat(debug: bool = False, voice: bool = False, record_time: int = 5) -> 
       - debug: bool (toggleable with !debug command in keyboard mode)
     """
     print_header(voice_mode=voice)
+
+    # ── Set up TTS if speak mode ───────────────────────────────────────────────
+    tts = None
+    if speak:
+        from src.maya.tts.speaker import TTSEngine
+        try:
+            tts = TTSEngine()
+            console.print("[green]Speaker ready.[/green] [dim]MAYA will speak her responses.[/dim]\n")
+        except Exception as e:
+            console.print(f"[yellow]TTS unavailable ({e}). Text-only mode.[/yellow]\n")
 
     # ── Set up STT if voice mode ───────────────────────────────────────────────
     stt = None
@@ -253,6 +270,13 @@ def run_chat(debug: bool = False, voice: bool = False, record_time: int = 5) -> 
 
         print_maya_response(result["response"], result["intent"], result["language"])
 
+        # ── Speak response if TTS enabled ─────────────────────────────────────
+        if tts:
+            try:
+                tts.speak(result["response"])
+            except RuntimeError as e:
+                console.print(f"[dim]TTS error: {e}[/dim]")
+
         # ── Save history for next turn ────────────────────────────────────────
         # result["message_history"] = history_with_user + [assistant_msg]
         # (the response node appended the assistant message via Annotated reducer)
@@ -289,6 +313,16 @@ if __name__ == "__main__":
         dest="record_time",
         help="Recording duration in seconds for voice mode (default: 5)",
     )
+    parser.add_argument(
+        "--speak",
+        action="store_true",
+        help="MAYA speaks her responses aloud using Piper TTS",
+    )
     args = parser.parse_args()
 
-    run_chat(debug=args.debug, voice=args.voice, record_time=args.record_time)
+    run_chat(
+        debug=args.debug,
+        voice=args.voice,
+        speak=args.speak,
+        record_time=args.record_time,
+    )
