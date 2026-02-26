@@ -1,6 +1,6 @@
 # 🤖 MAYA - Multi-Agent hYbrid Assistant
 ## Master Project Context Document
-### Version: 2.2 | Updated: 2026-02-26 | Status: Active Development - Week 1
+### Version: 2.3 | Updated: 2026-02-27 | Status: Active Development - Week 2
 
 ---
 
@@ -199,7 +199,22 @@ Reasons:
 - ✅ Tests updated - farewell + message history accumulation tests added
 - ✅ Committed and pushed to GitHub
 
-### Next Session (Option 2 - Ollama LLM)
+### Session 3 - 2026-02-27 (COMPLETED)
+- ✅ STT: `src/maya/stt/transcriber.py` - STTEngine with faster-whisper
+  - Bilingual strategy: Hindi-first transcription, English fallback if confidence < 0.65
+  - Fixes faster-whisper's known bug: Hindi misdetected as Arabic
+  - `listen(duration)` → records mic + transcribes in one call
+- ✅ `--voice` and `--record-time` flags added to `chat_loop.py`
+- ✅ `test_stt.py` - standalone mic + transcription test (3 utterances)
+- ✅ TTS: `src/maya/tts/speaker.py` - TTSEngine with Piper TTS
+  - Auto-downloads ONNX voice models from rhasspy/piper-voices (HuggingFace)
+  - Voice catalog: en_US-lessac-medium (default female), amy, en_GB-alba
+  - In-memory WAV synthesis (no temp files), sounddevice playback
+- ✅ `--speak` flag added to `chat_loop.py` - MAYA speaks every response
+- ✅ `test_tts.py` - standalone 3-phrase speaker test
+- ✅ Committed and pushed to GitHub
+
+### Next Session (Week 3 - Ollama LLM)
 - [ ] `pip install ollama` + `ollama pull llama3.2:3b`
 - [ ] Replace `help_response` node body with real `ollama.chat()` call
 - [ ] Add bilingual system prompt (MAYA's personality in Hindi/English)
@@ -208,7 +223,8 @@ Reasons:
 
 ### This Week
 - [ ] LangGraph Academy modules (office GenAI time)
-- [ ] Run `python chat_loop.py` and have a real conversation with MAYA
+- [ ] Run `python chat_loop.py --voice --speak` for full voice conversation
+- [ ] Run `python test_tts.py` to verify Piper TTS voice
 
 ### Next Weekend
 - [ ] Buy RPi5 + AI HAT+ 2 from Sim Lim Square
@@ -263,10 +279,13 @@ Build it following the architecture defined."
 - 🔄 LangGraph learning (Academy modules - office time)
 
 ### Pending
-- ⏳ Ollama LLM integration (real AI responses) ← next session
-- ⏳ Whisper STT (Week 2)
-- ⏳ Piper TTS (Week 2)
+- ⏳ Ollama LLM integration (real AI responses) ← next session (Week 3)
 - ⏳ Hardware purchase (RPi5 + AI HAT+ 2)
+
+### Week 2 Done
+- ✅ Whisper STT (faster-whisper, bilingual Hindi/English)
+- ✅ Piper TTS (neural voice, en_US-lessac-medium)
+- ✅ Full voice I/O: `python chat_loop.py --voice --speak`
 
 ---
 
@@ -298,6 +317,8 @@ Build it following the architecture defined."
 | Memory | SQLite | Simple, offline, persistent |
 | Coding approach | Vibe coding + AI | Build fast, understand, iterate |
 | Observability | LangSmith free tier | Sufficient for personal project |
+| STT language fix | Hindi-first + English fallback (conf 0.65) | faster-whisper misdetects Hindi as Arabic |
+| TTS voice | en_US-lessac-medium (US female) | No stable hi_IN voice in Piper catalog yet |
 
 ---
 
