@@ -191,22 +191,32 @@ class TTSEngine:
         """
         Download voice model files from HuggingFace if not already cached.
 
-        Files are stored in ~/.cache/huggingface/hub/ automatically.
+        Uses direct URL download (same approach as piper's own downloader).
+        Files cached in ~/.cache/piper-voices/ to avoid HF hub auth issues.
         Returns local file paths to the .onnx and .onnx.json files.
         """
-        from huggingface_hub import hf_hub_download
+        import shutil
+        from pathlib import Path
+        from urllib.request import urlopen
 
-        model_path = hf_hub_download(
-            repo_id="rhasspy/piper-voices",
-            filename=f"{hf_folder}/{filename_stem}.onnx",
-            repo_type="dataset",
-        )
-        config_path = hf_hub_download(
-            repo_id="rhasspy/piper-voices",
-            filename=f"{hf_folder}/{filename_stem}.onnx.json",
-            repo_type="dataset",
-        )
-        return model_path, config_path
+        # Cache dir: ~/.cache/piper-voices/<filename_stem>/
+        cache_dir = Path.home() / ".cache" / "piper-voices" / filename_stem
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Base URL (no /datasets/ prefix - that causes 401 with newer HF hub)
+        _HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+
+        model_path  = cache_dir / f"{filename_stem}.onnx"
+        config_path = cache_dir / f"{filename_stem}.onnx.json"
+
+        for local_path, ext in [(model_path, ".onnx"), (config_path, ".onnx.json")]:
+            if local_path.exists() and local_path.stat().st_size > 0:
+                continue  # Already cached
+            url = f"{_HF_BASE}/{hf_folder}/{filename_stem}{ext}?download=true"
+            with urlopen(url) as response, open(local_path, "wb") as out_file:
+                shutil.copyfileobj(response, out_file)
+
+        return str(model_path), str(config_path)
 
     # ──────────────────────────────────────────────────────────────────────────
     # UTILITY
