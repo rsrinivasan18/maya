@@ -29,7 +29,7 @@ sounddevice>=0.4.6             # Microphone recording (bundles PortAudio on Wind
 numpy>=1.24.0                  # Audio array handling
 
 # ─── Week 2: Text-to-Speech ────────────────────────────────────────────────────
-piper-tts>=2.0.0               # TTS - neural offline voices via ONNX
+piper-tts>=1.4.0               # TTS - neural offline voices via ONNX
 # huggingface-hub already installed as faster-whisper dependency (voice download)
 
 # ─── Phase 2: Web Backend (uncomment when ready) ───────────────────────────────

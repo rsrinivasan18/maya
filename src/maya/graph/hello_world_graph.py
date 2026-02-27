@@ -65,7 +65,7 @@ def detect_language(state: MayaState) -> dict:
         "alvida", "phir", "milenge", "shukriya", "dhanyavaad",
     }
 
-    words_in_input = set(user_input.split())
+    words_in_input = {w.strip(".,!?;:'\"") for w in user_input.split()}
     hindi_count = len(words_in_input & hindi_markers)
 
     if hindi_count >= 2:
