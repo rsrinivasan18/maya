@@ -282,7 +282,17 @@ def run_chat(
                 # If any node returns {"message_history": [new_msg]},
                 # LangGraph APPENDS it to history_with_user automatically
                 "session_id": session_id,   # for save_memory to tag the turn
-            }
+            },
+            config={
+                # LangSmith: label each turn clearly in the dashboard
+                "run_name": f"MAYA-turn-{turn_count}",
+                "metadata": {
+                    "session_id": session_id,
+                    "turn": turn_count,
+                    "user_name": "Srinika",
+                },
+                "tags": ["maya", "production"],
+            },
         )
 
         # ── Display ───────────────────────────────────────────────────────────
