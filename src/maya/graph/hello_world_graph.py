@@ -120,7 +120,7 @@ def load_memory(state: MayaState) -> dict:
     injects them into state so downstream nodes (greet, help) can use them.
     Graceful fallback if DB is missing or corrupt — MAYA still works.
     """
-    current_steps = state["steps"]
+    current_steps = state.get("steps", [])  # Studio sends minimal state (no steps key)
     db_path = state.get("memory_db_path") or None  # None → use default ~/.maya/memory.db
 
     try:

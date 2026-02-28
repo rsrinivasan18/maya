@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "maya_graph": "./src/maya/graph/hello_world_graph.py:maya_graph"
+  },
+  "env": ".env"
+}
