@@ -48,9 +48,6 @@ VOICE MODEL FILES:
   Size: ~50-60MB per voice (medium quality).
 """
 
-import io
-import wave
-
 import numpy as np
 
 
@@ -127,39 +124,27 @@ class TTSEngine:
         """
         Convert text to audio samples (does NOT play - just generates).
 
+        Uses piper v1.4+ API: synthesize() returns Iterable[AudioChunk].
+        Each AudioChunk has audio_float_array (float32 in [-1,1]) and sample_rate.
+
         Args:
             text: Text to synthesize. Romanized Hindi works fine.
                   e.g. "Namaste! Main MAYA hoon. Kya seekhna chahte ho?"
 
         Returns:
             (audio_data, sample_rate)
-            audio_data:  float32 numpy array, values in [-1.0, 1.0]
+            audio_data:  float32 numpy array shape (N, 1), values in [-1.0, 1.0]
             sample_rate: Hz (typically 22050 for medium quality models)
         """
-        # Synthesize directly to an in-memory WAV buffer (no temp files)
-        audio_buffer = io.BytesIO()
-        with wave.open(audio_buffer, "wb") as wav_file:
-            self._voice.synthesize(text, wav_file)
+        chunks = list(self._voice.synthesize(text))
+        if not chunks:
+            return np.zeros((0, 1), dtype=np.float32), 22050
 
-        # Parse WAV header + extract raw audio data
-        audio_buffer.seek(0)
-        with wave.open(audio_buffer, "rb") as wav_file:
-            sample_rate  = wav_file.getframerate()
-            n_channels   = wav_file.getnchannels()
-            sample_width = wav_file.getsampwidth()   # bytes per sample: 1=int8, 2=int16
-            raw_data     = wav_file.readframes(wav_file.getnframes())
-
-        # Convert raw bytes → integer array → float32 normalized to [-1, 1]
-        dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
-        dtype = dtype_map.get(sample_width, np.int16)
-
-        audio_int   = np.frombuffer(raw_data, dtype=dtype)
-        audio_float = audio_int.astype(np.float32) / np.iinfo(dtype).max
-
-        # If stereo, reshape to (n_frames, 2) for sounddevice
-        if n_channels > 1:
-            audio_float = audio_float.reshape(-1, n_channels)
-
+        sample_rate = chunks[0].sample_rate
+        # Concatenate float arrays from all sentence chunks, reshape to (N, 1)
+        audio_float = np.concatenate(
+            [c.audio_float_array for c in chunks]
+        ).reshape(-1, 1)
         return audio_float, sample_rate
 
     def speak(self, text: str) -> None:
@@ -177,6 +162,7 @@ class TTSEngine:
 
         try:
             audio_data, sample_rate = self.synthesize(text)
+            # audio_data is (N, 1) float32 - sounddevice plays directly
             sd.play(audio_data, samplerate=sample_rate)
             sd.wait()  # Block until playback complete
         except Exception as e:
