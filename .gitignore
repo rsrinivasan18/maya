@@ -53,6 +53,10 @@ data/*.sqlite
 # ─── LangSmith / LangChain cache ───────────────────────────────────────────────
 .langchain.db
 langchain_cache/
+.langgraph_api/          # LangGraph Studio runtime cache
+
+# ─── Generated files ────────────────────────────────────────────────────────────
+maya_graph.png           # Auto-generated graph diagram
 
 # ─── Logs ──────────────────────────────────────────────────────────────────────
 *.log
