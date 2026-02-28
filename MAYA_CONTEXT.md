@@ -239,11 +239,16 @@ Reasons:
 - ✅ 33/33 tests passing (1 fixed + 3 new TestMemoryNodes)
 - ✅ Committed and pushed to GitHub
 
-### Next Session (Week 4 continued)
-Options (choose one):
-1. **Math Tutor agent** - add `math_tutor` node, route math intent there
-2. **LangSmith Observability** - trace every Ollama call (free Developer tier)
-3. **Animated face display** - Pygame or HTML face showing emotions (Week 6 preview)
+### Session 5 Addendum - 2026-02-28
+- ✅ `!reset-memory` command — wipes DB in-place (SQL reset, Windows-safe)
+- ✅ `MemoryStore.reset()` — avoids PermissionError WinError 32 on Windows
+
+### Session 6 - 2026-02-28 (COMPLETED)
+- ✅ `_MATH_TUTOR_PROMPT` + `_build_math_prompt(language)` — dedicated math teaching prompt
+- ✅ `math_tutor_response` node — step-by-step solver, Indian analogies, practice problems
+- ✅ Router: 3-way → 4-way (greeting / farewell / math / help)
+- ✅ Graph: `understand_intent` → [greet | farewell | math_tutor | help] → save_memory → END
+- ✅ 37/37 tests passing (1 renamed + 4 new TestMathTutorAgent)
 
 ### This Week
 - [ ] LangGraph Academy modules (office GenAI time)

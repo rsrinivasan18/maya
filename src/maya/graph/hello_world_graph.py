@@ -78,6 +78,36 @@ def _build_system_prompt(language: str) -> str:
 
 
 # =============================================================================
+# MATH TUTOR SYSTEM PROMPT  (Session 6 - dedicated math agent)
+# =============================================================================
+
+_MATH_TUTOR_PROMPT = """You are MAYA's Math Tutor mode - a patient, step-by-step math teacher \
+for Srinika, a curious 10-year-old girl in India.
+
+YOUR TEACHING STYLE:
+- Always solve the problem first, THEN explain each step clearly
+- Use simple everyday analogies: apples, cricket scores, chai cups, rupees
+- Celebrate effort: "Great question! Let me show you how..."
+- If it's a calculation, show the working: "Step 1... Step 2... Answer!"
+- Keep it SHORT - 3 to 5 sentences maximum (spoken aloud via TTS)
+- End with a similar practice problem to reinforce learning
+
+IMPORTANT: Never just give the answer without explaining WHY."""
+
+_MATH_LANGUAGE_INSTRUCTIONS = {
+    "english":  "CRITICAL: Respond in English only.",
+    "hindi":    "CRITICAL: Respond in Hinglish (Roman script Hindi + English). Show math steps in English numbers.",
+    "hinglish": "CRITICAL: Respond in Hinglish - mix Hindi (Roman script) and English naturally. Math steps in English.",
+}
+
+
+def _build_math_prompt(language: str) -> str:
+    """Math tutor system prompt with language instruction."""
+    lang_instruction = _MATH_LANGUAGE_INSTRUCTIONS.get(language, _MATH_LANGUAGE_INSTRUCTIONS["english"])
+    return f"{_MATH_TUTOR_PROMPT}\n\n{lang_instruction}"
+
+
+# =============================================================================
 # NODES
 # =============================================================================
 
@@ -318,9 +348,56 @@ def farewell_response(state: MayaState) -> dict:
     }
 
 
+def math_tutor_response(state: MayaState) -> dict:
+    """
+    Node 3c: Dedicated Math Tutor via Ollama (Session 6 - new agent!).
+
+    Separate from help_response so it has its own:
+    - System prompt focused on step-by-step math teaching
+    - Analogies using everyday Indian context (rupees, cricket scores, chai)
+    - Practice problem at the end of each response
+
+    Same Ollama call pattern as help_response — only the system prompt differs.
+    This is the multi-agent principle: same model, different instructions = different agent.
+    """
+    language = state["language"]
+    current_steps = state["steps"]
+    message_history = state["message_history"]
+
+    try:
+        import ollama
+
+        history = message_history
+        if not history or history[-1].get("role") != "user":
+            history = history + [{"role": "user", "content": state["user_input"]}]
+
+        messages = [{"role": "system", "content": _build_math_prompt(language)}] + history
+
+        result = ollama.chat(
+            model="llama3.2:3b",
+            messages=messages,
+        )
+        response = result.message.content.strip()
+
+    except Exception as e:
+        response = (
+            "Hmm, my math brain isn't working right now! "
+            "Make sure Ollama is running with: ollama serve. "
+            f"Error: {e}"
+        )
+
+    return {
+        "response": response,
+        "message_history": [{"role": "assistant", "content": response}],
+        "steps": current_steps + [
+            f"[math_tutor_response/ollama] → language='{language}'"
+        ],
+    }
+
+
 def help_response(state: MayaState) -> dict:
     """
-    Node 3c: Helpful response via Ollama LLM (Session 3 upgrade).
+    Node 3d: General helpful response via Ollama LLM (Session 3 upgrade).
 
     Calls llama3.2:3b with:
     - MAYA_SYSTEM_PROMPT: personality + language rules
@@ -385,10 +462,13 @@ def help_response(state: MayaState) -> dict:
 
 def route_by_intent(state: MayaState) -> str:
     """
-    Routing function: 3-way split on intent.
+    Routing function: 4-way split on intent (Session 6: math added).
 
     Returns a string matching one of the conditional_edge keys below.
-    This grows over time - Week 4 adds math_tutor, story, vocabulary routes.
+    - greeting  → greet_response      (warm hello)
+    - farewell  → farewell_response   (goodbye)
+    - math      → math_tutor_response (NEW: step-by-step math teaching)
+    - everything else → help_response (general STEM Q&A via Ollama)
     """
     intent = state.get("intent", "general")
 
@@ -396,6 +476,8 @@ def route_by_intent(state: MayaState) -> str:
         return "greet_response"
     elif intent == "farewell":
         return "farewell_response"
+    elif intent == "math":
+        return "math_tutor_response"
     else:
         return "help_response"
 
@@ -422,34 +504,37 @@ def build_conversation_graph():
     graph = StateGraph(MayaState)
 
     # Register nodes
-    graph.add_node("load_memory",      load_memory)       # NEW Session 5
-    graph.add_node("detect_language",  detect_language)
-    graph.add_node("understand_intent", understand_intent)
-    graph.add_node("greet_response",   greet_response)
-    graph.add_node("farewell_response", farewell_response)
-    graph.add_node("help_response",    help_response)
-    graph.add_node("save_memory",      save_memory)       # NEW Session 5
+    graph.add_node("load_memory",          load_memory)          # Session 5
+    graph.add_node("detect_language",      detect_language)
+    graph.add_node("understand_intent",    understand_intent)
+    graph.add_node("greet_response",       greet_response)
+    graph.add_node("farewell_response",    farewell_response)
+    graph.add_node("math_tutor_response",  math_tutor_response)  # NEW Session 6
+    graph.add_node("help_response",        help_response)
+    graph.add_node("save_memory",          save_memory)          # Session 5
 
     # Fixed edges
     graph.add_edge(START,           "load_memory")        # was: START → detect_language
     graph.add_edge("load_memory",   "detect_language")
     graph.add_edge("detect_language", "understand_intent")
 
-    # Conditional edge - 3-way split on intent
+    # Conditional edge - 4-way split on intent (Session 6: math added)
     graph.add_conditional_edges(
         "understand_intent",
         route_by_intent,
         {
-            "greet_response":    "greet_response",
-            "farewell_response": "farewell_response",
-            "help_response":     "help_response",
+            "greet_response":       "greet_response",
+            "farewell_response":    "farewell_response",
+            "math_tutor_response":  "math_tutor_response",   # NEW
+            "help_response":        "help_response",
         },
     )
 
     # All response nodes lead to save_memory, then END
-    graph.add_edge("greet_response",    "save_memory")    # was → END
-    graph.add_edge("farewell_response", "save_memory")    # was → END
-    graph.add_edge("help_response",     "save_memory")    # was → END
+    graph.add_edge("greet_response",      "save_memory")
+    graph.add_edge("farewell_response",   "save_memory")
+    graph.add_edge("math_tutor_response", "save_memory")    # NEW
+    graph.add_edge("help_response",       "save_memory")
     graph.add_edge("save_memory",       END)
 
     return graph.compile()

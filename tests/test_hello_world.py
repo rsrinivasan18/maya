@@ -131,9 +131,10 @@ class TestConditionalRouting:
         result = invoke("What is the speed of light?")
         assert any("help_response" in step for step in result["steps"])
 
-    def test_math_routes_to_help_response(self):
+    def test_math_routes_to_math_tutor_response(self):
+        # Session 6: math now routes to dedicated math_tutor_response node
         result = invoke("Calculate 10 + 5")
-        assert any("help_response" in step for step in result["steps"])
+        assert any("math_tutor_response" in step for step in result["steps"])
 
 
 # ─── Message History ──────────────────────────────────────────────────────────
@@ -272,3 +273,36 @@ class TestMemoryNodes:
         assert profile["session_count"] == 0
         assert profile["total_turns"] == 0
         assert store.get_recent_topics() == []
+
+
+# ─── Math Tutor Agent ─────────────────────────────────────────────────────────
+
+class TestMathTutorAgent:
+    """
+    Tests for Session 6: math_tutor_response node.
+
+    Math intent routes to math_tutor_response (not help_response).
+    The node uses a dedicated step-by-step teaching prompt.
+    """
+
+    def test_math_routes_to_math_tutor(self):
+        """Math input goes to math_tutor_response, not help_response."""
+        result = invoke("What is 25 times 4?")
+        assert result["intent"] == "math"
+        assert any("math_tutor_response" in step for step in result["steps"])
+
+    def test_math_tutor_not_in_help_response(self):
+        """Math input does NOT go through help_response node."""
+        result = invoke("Calculate 100 divided by 5")
+        assert not any("help_response" in step for step in result["steps"])
+
+    def test_math_tutor_produces_response(self):
+        """math_tutor_response always returns a non-empty response."""
+        result = invoke("What is 7 plus 8?")
+        assert len(result["response"]) > 0
+
+    def test_non_math_still_goes_to_help(self):
+        """Non-math questions still go to help_response, not math_tutor."""
+        result = invoke("What is photosynthesis?")
+        assert any("help_response" in step for step in result["steps"])
+        assert not any("math_tutor_response" in step for step in result["steps"])
