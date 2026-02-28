@@ -274,6 +274,25 @@ class TestMemoryNodes:
         assert profile["total_turns"] == 0
         assert store.get_recent_topics() == []
 
+    def test_farewell_not_saved_to_topics(self, tmp_path):
+        """save_memory must NOT log farewell turns — 'bye' should never appear as a recent topic."""
+        db = str(tmp_path / "test.db")
+
+        maya_graph.invoke({
+            "user_input": "bye",
+            "language": "",
+            "intent": "",
+            "response": "",
+            "steps": [],
+            "message_history": [],
+            "memory_db_path": db,
+        })
+
+        store = MemoryStore(db_path=db)
+        recent = store.get_recent_topics()
+        assert "bye" not in recent
+        assert recent == []
+
 
 # ─── Math Tutor Agent ─────────────────────────────────────────────────────────
 

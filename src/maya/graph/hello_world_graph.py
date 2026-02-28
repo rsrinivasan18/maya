@@ -155,6 +155,12 @@ def save_memory(state: MayaState) -> dict:
     user_input = state["user_input"]
     intent = state.get("intent", "general")
 
+    # Don't save farewell turns — "bye" is not a topic to recall next session
+    if intent == "farewell":
+        return {
+            "steps": current_steps + ["[save_memory] → skipped (farewell)"],
+        }
+
     try:
         store = MemoryStore(db_path=db_path)
         store.log_turn(user_input, intent, session_id=session_id)
