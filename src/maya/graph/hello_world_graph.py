@@ -207,39 +207,53 @@ def understand_intent(state: MayaState) -> dict:
     """
     Node 2: Understand what the user wants.
 
-    Updated: Added farewell detection (bye/goodbye/alvida/phir milenge).
+    BUG FIX (Session 6): Use word-set membership for single-word triggers,
+    substring match only for multi-word phrases.
+    Old code: `"hi" in "...hindi"` → True (false greeting!)
+    New code: `"hi" in {"hindi", ...}` → False (correct: word must match exactly)
+
     Precedence: farewell > greeting > math > question > general
     """
     user_input = state["user_input"].lower()
     current_steps = state["steps"]
 
-    farewell_words = {
-        "bye", "goodbye", "good bye", "see you", "later", "cya",
-        "alvida", "phir milenge", "tata", "good night", "goodnight",
-        "band karo", "exit", "quit", "stop",
-    }
-    greeting_words = {
-        "hello", "hi", "hey", "namaste", "namaskar",
-        "good morning", "good evening", "sup",
-    }
-    math_words = {
-        "calculate", "solve", "math", "add", "subtract", "multiply", "divide",
-        "plus", "minus", "times", "equals", "+", "-", "*", "/", "sum", "total",
-    }
-    question_words = {
-        "what", "why", "how", "when", "where", "who", "which", "explain",
-        "tell me", "describe", "kya", "kyun", "kaise", "kab", "kahaan",
-        "kaun", "batao", "samjhao",
-    }
+    # Build a set of individual words (punctuation stripped) for exact-word checks
+    words_in_input = {w.strip(".,!?;:'\"") for w in user_input.split()}
 
-    # Farewell takes highest precedence - it exits the conversation
-    if any(word in user_input for word in farewell_words):
+    # Single-word triggers — checked via set membership (no substring false positives)
+    farewell_single  = {"bye", "goodbye", "goodnight", "cya", "alvida", "tata", "exit", "quit", "stop", "later"}
+    greeting_single  = {"hello", "hi", "hey", "namaste", "namaskar", "sup"}
+    math_single      = {"calculate", "solve", "math", "add", "subtract", "multiply", "divide",
+                        "plus", "minus", "times", "equals", "+", "-", "*", "/", "sum", "total"}
+    question_single  = {"what", "why", "how", "when", "where", "who", "which", "explain",
+                        "describe", "kya", "kyun", "kaise", "kab", "kahaan", "kaun", "batao", "samjhao"}
+
+    # Multi-word phrases — substring match is fine (they're specific enough)
+    farewell_phrases  = {"good bye", "see you", "phir milenge", "good night", "band karo"}
+    greeting_phrases  = {"good morning", "good evening"}
+    question_phrases  = {"tell me"}
+
+    def _match(single_set, phrase_set=None):
+        if words_in_input & single_set:
+            return True
+        if phrase_set and any(p in user_input for p in phrase_set):
+            return True
+        return False
+
+    # Greeting fires only if the message is short (≤ 6 words) AND contains a greeting word.
+    # Prevents "namaste, photosynthesis kya hai?" from being classified as a greeting.
+    def _is_greeting():
+        if len(words_in_input) > 6:
+            return False
+        return _match(greeting_single, greeting_phrases)
+
+    if _match(farewell_single, farewell_phrases):
         intent = "farewell"
-    elif any(word in user_input for word in greeting_words):
+    elif _is_greeting():
         intent = "greeting"
-    elif any(word in user_input for word in math_words):
+    elif _match(math_single):
         intent = "math"
-    elif any(word in user_input for word in question_words):
+    elif _match(question_single, question_phrases):
         intent = "question"
     else:
         intent = "general"
