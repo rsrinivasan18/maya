@@ -16,9 +16,10 @@ rich>=13.0.0
 # ─── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0.0
 
-# ─── Week 3: Online LLM APIs (uncomment when ready) ───────────────────────────
-# langchain-anthropic>=0.3.0     # Claude API
-# langchain-ollama>=0.2.0        # Ollama (local LLMs)
+# ─── Week 3: Local LLM via Ollama ──────────────────────────────────────────────
+ollama>=0.6.0                  # Ollama Python client (llama3.2:3b runs locally)
+# langchain-anthropic>=0.3.0     # Claude API (future)
+# langchain-ollama>=0.2.0        # LangChain Ollama wrapper (future)
 
 # ─── Week 3: Sarvam AI (Hindi/English bilingual model) ─────────────────────────
 # sarvam-python                  # Check PyPI for official package name

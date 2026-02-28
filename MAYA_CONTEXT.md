@@ -1,6 +1,6 @@
 # 🤖 MAYA - Multi-Agent hYbrid Assistant
 ## Master Project Context Document
-### Version: 2.3 | Updated: 2026-02-27 | Status: Active Development - Week 2
+### Version: 2.4 | Updated: 2026-02-28 | Status: Active Development - Week 3
 
 ---
 
@@ -214,17 +214,26 @@ Reasons:
 - ✅ `test_tts.py` - standalone 3-phrase speaker test
 - ✅ Committed and pushed to GitHub
 
-### Next Session (Week 3 - Ollama LLM)
-- [ ] `pip install ollama` + `ollama pull llama3.2:3b`
-- [ ] Replace `help_response` node body with real `ollama.chat()` call
-- [ ] Add bilingual system prompt (MAYA's personality in Hindi/English)
-- [ ] MAYA becomes actually intelligent - same graph, smarter node
-- [ ] Commit: `feat: integrate Ollama LLM for real AI responses`
+### Session 4 - 2026-02-28 (COMPLETED)
+- ✅ Ollama installed (`llama3.2:3b`, Q4_K_M, ~2GB, fully offline)
+- ✅ `help_response` node replaced with `ollama.chat()` call
+- ✅ Bilingual system prompt: `_MAYA_BASE_PROMPT` + per-turn `_LANGUAGE_INSTRUCTIONS`
+  - English / Hindi / Hinglish each get a separate explicit language reminder
+  - Rationale: 3B model needs per-turn language reminder to stay consistent
+- ✅ Full `message_history` passed to Ollama → multi-turn context awareness
+- ✅ Fallback: friendly error message if Ollama not running (no crash)
+- ✅ Bug fix: empty `message_history` guard (tests / direct invocations)
+- ✅ 30/30 tests passing, committed and pushed
+
+### Next Session (Week 4)
+Options (choose one):
+1. **Math Tutor agent** - add `math_tutor` node, route math intent there
+2. **SQLite Memory** - MAYA remembers daughter's name, past topics, preferences
+3. **LangSmith Observability** - trace every Ollama call (free Developer tier)
 
 ### This Week
 - [ ] LangGraph Academy modules (office GenAI time)
 - [ ] Run `python chat_loop.py --voice --speak` for full voice conversation
-- [ ] Run `python test_tts.py` to verify Piper TTS voice
 
 ### Next Weekend
 - [ ] Buy RPi5 + AI HAT+ 2 from Sim Lim Square
@@ -279,13 +288,19 @@ Build it following the architecture defined."
 - 🔄 LangGraph learning (Academy modules - office time)
 
 ### Pending
-- ⏳ Ollama LLM integration (real AI responses) ← next session (Week 3)
+- ⏳ Math Tutor agent node (Week 4)
+- ⏳ SQLite memory (Week 4-5)
 - ⏳ Hardware purchase (RPi5 + AI HAT+ 2)
 
 ### Week 2 Done
 - ✅ Whisper STT (faster-whisper, bilingual Hindi/English)
 - ✅ Piper TTS (neural voice, en_US-lessac-medium)
 - ✅ Full voice I/O: `python chat_loop.py --voice --speak`
+
+### Week 3 Done
+- ✅ Ollama LLM (llama3.2:3b, offline, bilingual system prompt)
+- ✅ MAYA answers real STEM questions in English and Hinglish
+- ✅ Multi-turn context: full message_history passed to Ollama
 
 ---
 
@@ -319,6 +334,8 @@ Build it following the architecture defined."
 | Observability | LangSmith free tier | Sufficient for personal project |
 | STT language fix | Hindi-first + English fallback (conf 0.65) | faster-whisper misdetects Hindi as Arabic |
 | TTS voice | en_US-lessac-medium (US female) | No stable hi_IN voice in Piper catalog yet |
+| LLM model | llama3.2:3b (Ollama, offline) | Good enough for STEM Q&A; fast on CPU |
+| Language prompt | Per-turn instruction in system prompt | 3B model needs explicit reminder each turn |
 
 ---
 

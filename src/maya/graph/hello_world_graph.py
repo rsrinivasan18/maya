@@ -43,6 +43,40 @@ from src.maya.models.state import MayaState
 
 
 # =============================================================================
+# MAYA SYSTEM PROMPT  (Session 3 - Ollama LLM integration)
+# =============================================================================
+
+_MAYA_BASE_PROMPT = """You are MAYA (Multi-Agent hYbrid Assistant) - a warm, encouraging bilingual \
+STEM companion for Srinika, a curious 10-year-old girl in India.
+
+YOUR PERSONALITY:
+- Warm, enthusiastic, and encouraging - like a smart older sister
+- You love Science, Technology, Engineering, and Math
+- You use simple analogies from everyday life (food, cricket, nature, school)
+- You celebrate curiosity: every question is a GREAT question
+- You keep explanations simple - no jargon unless you explain it immediately
+
+RESPONSE STYLE:
+- Keep responses SHORT - 2 to 4 sentences maximum
+- Responses are spoken aloud via TTS: write naturally, no bullet points or markdown
+- End with a short follow-up question to keep Srinika curious
+- Never be condescending - treat her as a smart, capable learner"""
+
+# Per-language instructions injected at call time (small models need explicit reminders)
+_LANGUAGE_INSTRUCTIONS = {
+    "english":  "CRITICAL: You MUST respond in English only. Do not use any Hindi or Urdu words.",
+    "hindi":    "CRITICAL: You MUST respond in Hinglish (Roman script Hindi mixed with English). Do not use Devanagari script.",
+    "hinglish": "CRITICAL: You MUST respond in Hinglish - natural mix of Hindi (Roman script) and English, like: 'Waah, bahut accha question hai! Gravity is the force...'",
+}
+
+
+def _build_system_prompt(language: str) -> str:
+    """Combine base prompt with a per-turn language instruction."""
+    lang_instruction = _LANGUAGE_INSTRUCTIONS.get(language, _LANGUAGE_INSTRUCTIONS["english"])
+    return f"{_MAYA_BASE_PROMPT}\n\n{lang_instruction}"
+
+
+# =============================================================================
 # NODES
 # =============================================================================
 
@@ -205,73 +239,51 @@ def farewell_response(state: MayaState) -> dict:
 
 def help_response(state: MayaState) -> dict:
     """
-    Node 3c: Helpful response for questions, math, or general chat.
+    Node 3c: Helpful response via Ollama LLM (Session 3 upgrade).
 
-    Week 3 upgrade: Replace template strings with actual Sarvam/Ollama LLM call.
+    Calls llama3.2:3b with:
+    - MAYA_SYSTEM_PROMPT: personality + language rules
+    - Full message_history: gives Ollama multi-turn context
+    The graph structure and return dict are unchanged from Session 2.
+
+    Falls back to a friendly error message if Ollama is not reachable.
     """
     intent = state["intent"]
     language = state["language"]
     current_steps = state["steps"]
+    message_history = state["message_history"]
 
-    templates = {
-        "math": {
-            "english": (
-                "Ooh, a math problem! Numbers are my superpower!\n"
-                "Full math solving with step-by-step explanations is coming in Week 4.\n"
-                "For now, try: 'What is algebra?' or 'Explain fractions'!"
-            ),
-            "hindi": (
-                "Arre waah, math ka sawaal! Numbers meri favourite hain!\n"
-                "Week 4 mein main step-by-step solve karungi.\n"
-                "Abhi try karo: 'Algebra kya hai?' ya 'Fractions samjhao'!"
-            ),
-            "hinglish": (
-                "Oh, math question! Numbers mujhe bahut pasand hain!\n"
-                "Week 4 mein full solving aayega.\n"
-                "Abhi try karo: 'Algebra kya hai?' or 'Explain fractions'!"
-            ),
-        },
-        "question": {
-            "english": (
-                "Great question! I'm thinking...\n"
-                "Full AI-powered answers with Sarvam/Ollama are coming in Week 3.\n"
-                "Right now I'm just a baby graph learning to walk!"
-            ),
-            "hindi": (
-                "Bahut accha sawaal! Soch rahi hun...\n"
-                "Week 3 mein Sarvam/Ollama se full AI answer aayega.\n"
-                "Abhi main graph sikhna seekh rahi hun!"
-            ),
-            "hinglish": (
-                "Accha question! Let me think...\n"
-                "Week 3 mein full AI answer aayega Sarvam/Ollama se.\n"
-                "Right now main ek baby graph hun, seekh rahi hun!"
-            ),
-        },
-        "general": {
-            "english": (
-                "Got it! I'm MAYA, your STEM learning companion.\n"
-                "Try: 'Hello', 'What is gravity?', 'Calculate 5 + 3', or 'Bye'!"
-            ),
-            "hindi": (
-                "Samjha! Main MAYA hun, aapka STEM saathi.\n"
-                "Try karo: 'Namaste', 'Gravity kya hai?', ya '5+3 calculate karo'!"
-            ),
-            "hinglish": (
-                "Okay! Main MAYA hun - tumhara STEM companion.\n"
-                "Try karo: 'Hello', 'What is gravity?', ya 'Calculate 5+3'!"
-            ),
-        },
-    }
+    try:
+        import ollama
 
-    intent_templates = templates.get(intent, templates["general"])
-    response = intent_templates.get(language, intent_templates["english"])
+        # Build messages: language-aware system prompt + full conversation history
+        # chat_loop.py always appends the user message before invoking, so
+        # message_history ends with {"role": "user", ...}. But if called directly
+        # (e.g. in tests) with empty history, we add user_input explicitly.
+        history = message_history
+        if not history or history[-1].get("role") != "user":
+            history = history + [{"role": "user", "content": state["user_input"]}]
+        messages = [{"role": "system", "content": _build_system_prompt(language)}] + history
+
+        result = ollama.chat(
+            model="llama3.2:3b",
+            messages=messages,
+        )
+        response = result.message.content.strip()
+
+    except Exception as e:
+        # Graceful fallback - MAYA stays in character even if Ollama is down
+        response = (
+            "Hmm, I'm having a little trouble thinking right now! "
+            "Make sure Ollama is running with: ollama serve. "
+            f"Error: {e}"
+        )
 
     return {
         "response": response,
         "message_history": [{"role": "assistant", "content": response}],
         "steps": current_steps + [
-            f"[help_response] → intent='{intent}', language='{language}'"
+            f"[help_response/ollama] → intent='{intent}', language='{language}'"
         ],
     }
 
