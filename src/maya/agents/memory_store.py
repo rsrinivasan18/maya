@@ -143,3 +143,16 @@ class MemoryStore:
                 "UPDATE profile SET total_turns = total_turns + 1 WHERE id = 1"
             )
             conn.commit()
+
+    def reset(self) -> None:
+        """
+        Wipe all memory and reset counters — keeps the DB file open (Windows-safe).
+        Used by !reset-memory in chat_loop; avoids the PermissionError from
+        trying to delete a file that SQLite still has locked on Windows.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM topics")
+            conn.execute(
+                "UPDATE profile SET session_count = 0, total_turns = 0 WHERE id = 1"
+            )
+            conn.commit()

@@ -60,7 +60,7 @@ console = Console()
 
 def print_header(voice_mode: bool = False) -> None:
     mode_line = "Voice mode ON  |  Speak when prompted" if voice_mode else \
-                "Type 'bye' or 'alvida' to exit  |  '!history' to review  |  '!debug' to toggle trace"
+                "bye/alvida to exit  |  !history  |  !debug  |  !clear  |  !reset-memory"
     console.print(
         Panel.fit(
             Text.assemble(
@@ -247,6 +247,17 @@ def run_chat(
                 message_history = []
                 turn_count = 0
                 console.print("[dim]History cleared. Fresh start![/dim]")
+                continue
+
+            if user_input.lower() == "!reset-memory":
+                memory.reset()                  # clears tables in-place (Windows-safe)
+                session_id = memory.start_session()
+                message_history = []
+                turn_count = 0
+                console.print(
+                    "[yellow]Memory reset![/yellow] [dim]All sessions and topics cleared. "
+                    f"Starting fresh as session #{session_id}.[/dim]"
+                )
                 continue
 
         # ── Build state for this turn ─────────────────────────────────────────
