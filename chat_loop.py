@@ -47,6 +47,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from src.maya.agents.memory_store import MemoryStore
 from src.maya.graph.hello_world_graph import maya_graph
 from src.maya.config.settings import settings
 
@@ -155,6 +156,14 @@ def run_chat(
     """
     print_header(voice_mode=voice)
 
+    # ── Start a new memory session (increments session_count in SQLite) ────────
+    memory = MemoryStore()
+    session_id = memory.start_session()
+    console.print(
+        f"[dim]Memory: session #{session_id} | "
+        f"{memory.get_profile()['total_turns']} total turns across all sessions[/dim]\n"
+    )
+
     # ── Set up TTS if speak mode ───────────────────────────────────────────────
     tts = None
     if speak:
@@ -261,6 +270,7 @@ def run_chat(
                 # Annotated[list, operator.add]:
                 # If any node returns {"message_history": [new_msg]},
                 # LangGraph APPENDS it to history_with_user automatically
+                "session_id": session_id,   # for save_memory to tag the turn
             }
         )
 

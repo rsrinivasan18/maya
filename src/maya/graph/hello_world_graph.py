@@ -39,6 +39,7 @@ UPDATED GRAPH FLOW:
 
 from langgraph.graph import StateGraph, END, START
 
+from src.maya.agents.memory_store import MemoryStore
 from src.maya.models.state import MayaState
 
 
@@ -79,6 +80,61 @@ def _build_system_prompt(language: str) -> str:
 # =============================================================================
 # NODES
 # =============================================================================
+
+
+def load_memory(state: MayaState) -> dict:
+    """
+    Node 0: Load persistent memory from SQLite before any other processing.
+
+    Reads user profile (session_count) and recent conversation topics,
+    injects them into state so downstream nodes (greet, help) can use them.
+    Graceful fallback if DB is missing or corrupt — MAYA still works.
+    """
+    current_steps = state["steps"]
+    db_path = state.get("memory_db_path") or None  # None → use default ~/.maya/memory.db
+
+    try:
+        store = MemoryStore(db_path=db_path)
+        profile = store.get_profile()
+        recent = store.get_recent_topics(limit=3)
+    except Exception:
+        profile = {"user_name": "Srinika", "session_count": 0, "total_turns": 0}
+        recent = []
+
+    return {
+        "user_name":     profile["user_name"],
+        "session_count": profile["session_count"],
+        "recent_topics": recent,
+        "steps": current_steps + [
+            f"[load_memory] → session_count={profile['session_count']}, "
+            f"{len(recent)} recent topic(s)"
+        ],
+    }
+
+
+def save_memory(state: MayaState) -> dict:
+    """
+    Node (final): Persist this turn to SQLite after the response is generated.
+
+    Pure side-effect node — logs user_input + intent to the topics table.
+    Returns only an updated steps list (no state data changes).
+    """
+    current_steps = state["steps"]
+    db_path = state.get("memory_db_path") or None
+    session_id = state.get("session_id", 0)
+    user_input = state["user_input"]
+    intent = state.get("intent", "general")
+
+    try:
+        store = MemoryStore(db_path=db_path)
+        store.log_turn(user_input, intent, session_id=session_id)
+        log_status = "ok"
+    except Exception as e:
+        log_status = f"error: {e}"
+
+    return {
+        "steps": current_steps + [f"[save_memory] → logged turn ({log_status})"],
+    }
 
 
 def detect_language(state: MayaState) -> dict:
@@ -168,29 +224,54 @@ def greet_response(state: MayaState) -> dict:
     """
     Node 3a: Warm greeting in the detected language.
 
-    NEW: Returns message_history entry.
-    Annotated[list, operator.add] means LangGraph APPENDS this to existing history.
+    Session 5 upgrade: Uses session_count from load_memory.
+    - session_count == 1 → first-ever visit, introduce MAYA
+    - session_count > 1  → returning visit, "Welcome back!" + recall last topic
     """
     language = state["language"]
     current_steps = state["steps"]
+    session_count = state.get("session_count", 0)
+    recent_topics = state.get("recent_topics", [])
 
-    greetings = {
-        "english": (
-            "Hello! I'm MAYA - your bilingual STEM companion!\n"
-            "I can help you explore Science, Technology, Engineering and Math.\n"
-            "What would you like to learn today?"
-        ),
-        "hindi": (
-            "Namaste! Main MAYA hun - aapka bilingual STEM saathi!\n"
-            "Main aapko Science, Technology, Engineering aur Math mein help kar sakti hun.\n"
-            "Aaj kya seekhna chahte hain?"
-        ),
-        "hinglish": (
-            "Hello! Main MAYA hun - tumhara bilingual STEM companion!\n"
-            "Science, Math, Technology - sab mein main help karungi!\n"
-            "Kya seekhna chahte ho aaj?"
-        ),
-    }
+    if session_count > 1 and recent_topics:
+        # Returning visitor — personalised welcome
+        last_topic = recent_topics[0][:60]  # cap length for TTS
+        greetings = {
+            "english": (
+                f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
+                f"Last time you asked about: \"{last_topic}\".\n"
+                "What shall we explore today?"
+            ),
+            "hindi": (
+                f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
+                f"Pichhli baar tumne poochha tha: \"{last_topic}\".\n"
+                "Aaj kya seekhna chahti ho?"
+            ),
+            "hinglish": (
+                f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
+                f"Last time tumne pucha tha: \"{last_topic}\".\n"
+                "Aaj kya explore karna hai?"
+            ),
+        }
+    else:
+        # First visit ever (or load_memory not available)
+        greetings = {
+            "english": (
+                "Hello! I'm MAYA - your bilingual STEM companion!\n"
+                "I can help you explore Science, Technology, Engineering and Math.\n"
+                "What would you like to learn today?"
+            ),
+            "hindi": (
+                "Namaste! Main MAYA hun - aapka bilingual STEM saathi!\n"
+                "Main aapko Science, Technology, Engineering aur Math mein help kar sakti hun.\n"
+                "Aaj kya seekhna chahte hain?"
+            ),
+            "hinglish": (
+                "Hello! Main MAYA hun - tumhara bilingual STEM companion!\n"
+                "Science, Math, Technology - sab mein main help karungi!\n"
+                "Kya seekhna chahte ho aaj?"
+            ),
+        }
 
     response = greetings.get(language, greetings["english"])
 
@@ -256,14 +337,22 @@ def help_response(state: MayaState) -> dict:
     try:
         import ollama
 
-        # Build messages: language-aware system prompt + full conversation history
+        # Build messages: language-aware system prompt + full conversation history.
         # chat_loop.py always appends the user message before invoking, so
         # message_history ends with {"role": "user", ...}. But if called directly
         # (e.g. in tests) with empty history, we add user_input explicitly.
         history = message_history
         if not history or history[-1].get("role") != "user":
             history = history + [{"role": "user", "content": state["user_input"]}]
-        messages = [{"role": "system", "content": _build_system_prompt(language)}] + history
+
+        # Enrich system prompt with memory context if available
+        system_content = _build_system_prompt(language)
+        recent_topics = state.get("recent_topics", [])
+        if recent_topics:
+            topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])
+            system_content += f"\n\nContext: Srinika has previously asked about {topic_list}. You can refer back to these if relevant."
+
+        messages = [{"role": "system", "content": system_content}] + history
 
         result = ollama.chat(
             model="llama3.2:3b",
@@ -318,41 +407,50 @@ def route_by_intent(state: MayaState) -> str:
 
 def build_conversation_graph():
     """
-    Assembles MAYA's conversation graph (Session 2 version).
+    Assembles MAYA's conversation graph (Session 5 version).
 
-    Changes from Session 1:
-    - Added farewell_response node
-    - route_by_intent is now 3-way
-    - Response nodes now write to message_history
+    Changes from Session 4:
+    - load_memory node added as the FIRST node (before detect_language)
+    - save_memory node added as the LAST node (all response nodes → save_memory → END)
+    - greet_response now says "Welcome back!" on return sessions
+    - help_response includes recent topic context in system prompt
+
+    Graph topology:
+        START → load_memory → detect_language → understand_intent
+             → [greet | farewell | help] → save_memory → END
     """
     graph = StateGraph(MayaState)
 
     # Register nodes
-    graph.add_node("detect_language", detect_language)
+    graph.add_node("load_memory",      load_memory)       # NEW Session 5
+    graph.add_node("detect_language",  detect_language)
     graph.add_node("understand_intent", understand_intent)
-    graph.add_node("greet_response", greet_response)
-    graph.add_node("farewell_response", farewell_response)   # NEW
-    graph.add_node("help_response", help_response)
+    graph.add_node("greet_response",   greet_response)
+    graph.add_node("farewell_response", farewell_response)
+    graph.add_node("help_response",    help_response)
+    graph.add_node("save_memory",      save_memory)       # NEW Session 5
 
     # Fixed edges
-    graph.add_edge(START, "detect_language")
+    graph.add_edge(START,           "load_memory")        # was: START → detect_language
+    graph.add_edge("load_memory",   "detect_language")
     graph.add_edge("detect_language", "understand_intent")
 
-    # Conditional edge - now 3-way
+    # Conditional edge - 3-way split on intent
     graph.add_conditional_edges(
         "understand_intent",
         route_by_intent,
         {
             "greet_response":    "greet_response",
-            "farewell_response": "farewell_response",   # NEW
+            "farewell_response": "farewell_response",
             "help_response":     "help_response",
         },
     )
 
-    # All response nodes lead to END
-    graph.add_edge("greet_response", END)
-    graph.add_edge("farewell_response", END)             # NEW
-    graph.add_edge("help_response", END)
+    # All response nodes lead to save_memory, then END
+    graph.add_edge("greet_response",    "save_memory")    # was → END
+    graph.add_edge("farewell_response", "save_memory")    # was → END
+    graph.add_edge("help_response",     "save_memory")    # was → END
+    graph.add_edge("save_memory",       END)
 
     return graph.compile()
 

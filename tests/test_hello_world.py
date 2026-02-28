@@ -10,6 +10,7 @@ Updated Session 2:
 """
 
 import pytest
+from src.maya.agents.memory_store import MemoryStore
 from src.maya.graph.hello_world_graph import maya_graph
 
 
@@ -199,11 +200,75 @@ class TestEndToEnd:
             assert len(result["response"]) > 0, f"Empty response for: '{text}'"
 
     def test_steps_show_correct_node_order(self):
+        # Session 5: load_memory is now the first node, shifting all indices by 1
         result = invoke("Hello!")
-        assert result["steps"][0].startswith("[detect_language]")
-        assert result["steps"][1].startswith("[understand_intent]")
+        assert result["steps"][0].startswith("[load_memory]")
+        assert result["steps"][1].startswith("[detect_language]")
+        assert result["steps"][2].startswith("[understand_intent]")
 
     def test_user_input_preserved_unchanged(self):
         original = "Hello MAYA, kya hal hai?"
         result = invoke(original)
         assert result["user_input"] == original
+
+
+# ─── Memory Nodes ─────────────────────────────────────────────────────────────
+
+class TestMemoryNodes:
+    """
+    Tests for Session 5 SQLite memory: load_memory and save_memory nodes.
+
+    All tests use a tmp_path DB (pytest fixture) so they never touch
+    the real ~/.maya/memory.db.  The db path is injected via the
+    memory_db_path state field.
+    """
+
+    def test_load_memory_returns_profile(self, tmp_path):
+        """load_memory populates user_name and session_count from a seeded DB."""
+        db = str(tmp_path / "test.db")
+
+        # Seed the DB: one session already happened
+        store = MemoryStore(db_path=db)
+        store.start_session()  # session_count becomes 1
+
+        result = maya_graph.invoke({
+            "user_input": "Hello!",
+            "language": "",
+            "intent": "",
+            "response": "",
+            "steps": [],
+            "message_history": [],
+            "memory_db_path": db,
+        })
+
+        assert result["user_name"] == "Srinika"
+        assert result["session_count"] == 1
+
+    def test_save_memory_logs_turn(self, tmp_path):
+        """save_memory logs the user's message to the topics table after each turn."""
+        db = str(tmp_path / "test.db")
+
+        maya_graph.invoke({
+            "user_input": "What is photosynthesis?",
+            "language": "",
+            "intent": "",
+            "response": "",
+            "steps": [],
+            "message_history": [],
+            "memory_db_path": db,
+        })
+
+        store = MemoryStore(db_path=db)
+        recent = store.get_recent_topics()
+        assert "What is photosynthesis?" in recent
+
+    def test_fresh_install_defaults(self, tmp_path):
+        """MemoryStore returns safe defaults when the DB is brand new."""
+        db = str(tmp_path / "fresh.db")
+        store = MemoryStore(db_path=db)
+
+        profile = store.get_profile()
+        assert profile["user_name"] == "Srinika"
+        assert profile["session_count"] == 0
+        assert profile["total_turns"] == 0
+        assert store.get_recent_topics() == []

@@ -36,7 +36,7 @@ A: It's a LangGraph REDUCER - it tells LangGraph HOW to merge a key
 """
 
 import operator
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 
 class MayaState(TypedDict):
@@ -66,6 +66,15 @@ class MayaState(TypedDict):
     # APPENDS new_msg to the existing list instead of replacing it.
     # The REPL passes the accumulated history into each new turn.
     message_history: Annotated[list[dict], operator.add]
+
+    # ── Persistent Memory (SQLite) ─────────────────────────────────────────────
+    # Populated by load_memory node; consumed by greet_response + help_response.
+    # NotRequired = backward-compatible: existing tests don't need to set these.
+    user_name:      NotRequired[str]        # "Srinika" (loaded from DB)
+    session_count:  NotRequired[int]        # Total sessions she's had with MAYA
+    recent_topics:  NotRequired[list[str]]  # Last 3 user messages across sessions
+    session_id:     NotRequired[int]        # Set by chat_loop; used by save_memory
+    memory_db_path: NotRequired[str]        # Override DB path for test isolation
 
     # ── Debug / Learning visibility ────────────────────────────────────────────
     steps: list[str]         # Log entry from each node - shows graph execution flow

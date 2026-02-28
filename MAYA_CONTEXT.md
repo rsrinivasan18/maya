@@ -1,6 +1,6 @@
 # 🤖 MAYA - Multi-Agent hYbrid Assistant
 ## Master Project Context Document
-### Version: 2.4 | Updated: 2026-02-28 | Status: Active Development - Week 3
+### Version: 2.5 | Updated: 2026-02-28 | Status: Active Development - Week 4
 
 ---
 
@@ -225,11 +225,25 @@ Reasons:
 - ✅ Bug fix: empty `message_history` guard (tests / direct invocations)
 - ✅ 30/30 tests passing, committed and pushed
 
-### Next Session (Week 4)
+### Session 5 - 2026-02-28 (COMPLETED)
+- ✅ `src/maya/agents/memory_store.py` — MemoryStore class (SQLite at `~/.maya/memory.db`)
+  - Tables: `profile` (user_name, session_count, total_turns), `topics` (turn log)
+  - Methods: `start_session()`, `get_profile()`, `get_recent_topics()`, `log_turn()`
+- ✅ `src/maya/models/state.py` — Added 5 NotRequired fields (user_name, session_count, recent_topics, session_id, memory_db_path)
+- ✅ `load_memory` node (first node) — loads profile + recent topics from SQLite into state
+- ✅ `save_memory` node (last node) — persists each user turn to topics table
+- ✅ `greet_response` updated — "Welcome back, Srinika! Last time you asked about..." on return sessions
+- ✅ `help_response` updated — prepends recent topic context to Ollama system prompt
+- ✅ Graph topology: START → load_memory → detect_language → ... → response → save_memory → END
+- ✅ `chat_loop.py` — `start_session()` called once at startup, `session_id` passed into graph
+- ✅ 33/33 tests passing (1 fixed + 3 new TestMemoryNodes)
+- ✅ Committed and pushed to GitHub
+
+### Next Session (Week 4 continued)
 Options (choose one):
 1. **Math Tutor agent** - add `math_tutor` node, route math intent there
-2. **SQLite Memory** - MAYA remembers daughter's name, past topics, preferences
-3. **LangSmith Observability** - trace every Ollama call (free Developer tier)
+2. **LangSmith Observability** - trace every Ollama call (free Developer tier)
+3. **Animated face display** - Pygame or HTML face showing emotions (Week 6 preview)
 
 ### This Week
 - [ ] LangGraph Academy modules (office GenAI time)
@@ -289,8 +303,12 @@ Build it following the architecture defined."
 
 ### Pending
 - ⏳ Math Tutor agent node (Week 4)
-- ⏳ SQLite memory (Week 4-5)
+- ⏳ LangSmith Observability (Week 4)
 - ⏳ Hardware purchase (RPi5 + AI HAT+ 2)
+
+### Week 4 Done (Session 5)
+- ✅ SQLite memory (MemoryStore, load_memory + save_memory nodes)
+- ✅ MAYA now remembers Srinika across sessions ("Welcome back!")
 
 ### Week 2 Done
 - ✅ Whisper STT (faster-whisper, bilingual Hindi/English)
@@ -336,6 +354,9 @@ Build it following the architecture defined."
 | TTS voice | en_US-lessac-medium (US female) | No stable hi_IN voice in Piper catalog yet |
 | LLM model | llama3.2:3b (Ollama, offline) | Good enough for STEM Q&A; fast on CPU |
 | Language prompt | Per-turn instruction in system prompt | 3B model needs explicit reminder each turn |
+| Memory storage | SQLite (~/.maya/memory.db) | Offline, no server, single file, Python built-in |
+| Memory test isolation | memory_db_path state field + tmp_path fixture | Tests use temp DB, never touch real DB |
+| MemoryStore instantiation | Fresh per node call | No global state, clean and testable |
 
 ---
 
