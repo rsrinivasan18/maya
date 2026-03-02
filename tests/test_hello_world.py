@@ -331,6 +331,76 @@ class TestMathTutorAgent:
         assert not any("math_tutor_response" in step for step in result["steps"])
 
 
+# ─── Session 10: Procedural Memory ───────────────────────────────────────────
+
+class TestProceduralMemory:
+    """
+    Tests for Session 10: mastery table + update_mastery + get_mastery_summary.
+
+    Procedural memory tracks how many times Srinika has explored each topic.
+    Levels: curious (1x) | learning (2x) | practiced (3-4x) | expert (5+x)
+    """
+
+    def test_mastery_table_created(self, tmp_path):
+        """MemoryStore creates the mastery table on first init."""
+        db = str(tmp_path / "mastery.db")
+        store = MemoryStore(db_path=db)
+        # If the table doesn't exist this would raise; empty list is fine
+        result = store.get_mastery_summary()
+        assert result == []
+
+    def test_update_mastery_increments_count(self, tmp_path):
+        """Calling update_mastery twice for the same topic gives count=2."""
+        db = str(tmp_path / "mastery.db")
+        store = MemoryStore(db_path=db)
+        store.update_mastery("photosynthesis")
+        store.update_mastery("photosynthesis")
+        mastery = store.get_mastery_summary()
+        assert len(mastery) == 1
+        assert mastery[0]["topic"] == "photosynthesis"
+        assert mastery[0]["count"] == 2
+        assert mastery[0]["level"] == "learning"
+
+    def test_mastery_logged_after_graph_turn(self, tmp_path):
+        """After a graph invocation, mastered_topics is updated in the DB."""
+        db = str(tmp_path / "mastery.db")
+        maya_graph.invoke({
+            "user_input": "What is photosynthesis?",
+            "language": "",
+            "intent": "",
+            "response": "",
+            "steps": [],
+            "message_history": [],
+            "memory_db_path": db,
+        })
+        store = MemoryStore(db_path=db)
+        mastery = store.get_mastery_summary()
+        # At least one topic should have been extracted and stored
+        assert len(mastery) >= 1
+
+    def test_mastery_in_state_after_load(self, tmp_path):
+        """mastered_topics is populated in state after load_memory runs."""
+        db = str(tmp_path / "mastery.db")
+        # Seed mastery directly
+        store = MemoryStore(db_path=db)
+        store.update_mastery("gravity")
+        store.update_mastery("gravity")
+        store.update_mastery("gravity")
+
+        result = maya_graph.invoke({
+            "user_input": "Hello!",
+            "language": "",
+            "intent": "",
+            "response": "",
+            "steps": [],
+            "message_history": [],
+            "memory_db_path": db,
+        })
+        assert "mastered_topics" in result
+        topics = result["mastered_topics"]
+        assert any(m["topic"] == "gravity" and m["count"] == 3 for m in topics)
+
+
 # ─── Session 8: Connectivity Routing ──────────────────────────────────────────
 
 class TestConnectivityRouting:

@@ -87,5 +87,12 @@ class MayaState(TypedDict):
     # Empty string on first-ever session (no prior session to summarise).
     last_session_summary: NotRequired[str]
 
+    # ── Procedural Memory (Session 10) ─────────────────────────────────────────
+    # How many times Srinika has explored each topic across ALL sessions.
+    # Each entry: {"topic": str, "count": int, "level": str}
+    # Levels: "curious" | "learning" | "practiced" | "expert"
+    # Loaded by load_memory; surfaced in greet_response + LLM system prompts.
+    mastered_topics: NotRequired[list[dict]]
+
     # ── Debug / Learning visibility ────────────────────────────────────────────
     steps: list[str]         # Log entry from each node - shows graph execution flow

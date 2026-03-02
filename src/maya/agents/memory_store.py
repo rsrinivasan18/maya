@@ -1,5 +1,5 @@
 """
-MAYA Memory Store - Session 9 Update
+MAYA Memory Store - Session 10 Update
 ======================================
 Persistent SQLite memory for MAYA.
 
@@ -7,6 +7,7 @@ Stores:
   - User profile: user name, session count, total turns
   - Topic log: every user message + semantic topic (extracted by LLM) + intent
   - Session summaries: one-sentence episodic summary per session (from farewell node)
+  - Mastery log: how many times Srinika has explored each topic (procedural memory)
 
 DB location: ~/.maya/memory.db
 
@@ -40,8 +41,11 @@ Session 9 — Three memory improvements:
      Loaded next session and shown in the greeting: Srinika sees what she
      studied last time, not a mechanical transcript of her own words.
 
-  3. Procedural memory (future):
-     Track concepts mastered — not implemented yet.
+  3. Procedural memory (mastery table):
+     Each time a topic is extracted, its count is incremented in the mastery table.
+     Levels: curious (1x) → learning (2x) → practiced (3-4x) → expert (5+x).
+     Surfaced in greet_response ("You've explored photosynthesis 4 times!") and
+     injected into LLM system prompts so MAYA builds on prior knowledge.
 """
 
 import sqlite3
@@ -49,6 +53,22 @@ from pathlib import Path
 
 DEFAULT_DB_PATH = Path.home() / ".maya" / "memory.db"
 DEFAULT_USER_NAME = "Srinika"  # Week 6: replace with voice-based name detection
+
+
+def _mastery_level(count: int) -> str:
+    """
+    Map an exploration count to a human-readable mastery level.
+
+    These thresholds are intentionally low — for a 10-year-old, revisiting
+    a topic 3 times already shows meaningful curiosity and familiarity.
+    """
+    if count >= 5:
+        return "expert"
+    if count >= 3:
+        return "practiced"
+    if count >= 2:
+        return "learning"
+    return "curious"
 
 
 class MemoryStore:
@@ -64,12 +84,14 @@ class MemoryStore:
     Usage
     -----
         store = MemoryStore()
-        session_id = store.start_session()           # once at startup
-        profile = store.get_profile()               # {user_name, session_count, total_turns}
-        recent = store.get_recent_topics(3)         # ["photosynthesis", "Newton laws", ...]
+        session_id = store.start_session()                  # once at startup
+        profile = store.get_profile()                       # {user_name, session_count, total_turns}
+        recent = store.get_recent_topics(3)                 # ["photosynthesis", "Newton laws", ...]
         store.log_turn("What is gravity?", "question", session_id, topic="gravity")
+        store.update_mastery("gravity")                     # increments count for this topic
+        mastery = store.get_mastery_summary(limit=5)        # [{topic, count, level}, ...]
         store.save_session_summary(session_id, "Srinika explored gravity and light.")
-        summary = store.get_last_session_summary()  # "Srinika explored gravity and light."
+        summary = store.get_last_session_summary()          # "Srinika explored gravity and light."
     """
 
     def __init__(self, db_path: str | None = None) -> None:
@@ -121,6 +143,17 @@ class MemoryStore:
                     session_id INTEGER NOT NULL DEFAULT 0,
                     summary    TEXT    NOT NULL DEFAULT '',
                     timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+
+            # Session 10: procedural memory — how many times each topic was explored
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS mastery (
+                    topic_key  TEXT    PRIMARY KEY,
+                    display    TEXT    NOT NULL,
+                    count      INTEGER NOT NULL DEFAULT 1,
+                    first_seen TEXT    NOT NULL DEFAULT (datetime('now')),
+                    last_seen  TEXT    NOT NULL DEFAULT (datetime('now'))
                 )
             """)
 
@@ -219,6 +252,62 @@ class MemoryStore:
             )
             conn.commit()
 
+    def update_mastery(self, topic: str) -> None:
+        """
+        Increment the exploration count for a topic (procedural memory).
+
+        Uses SQLite's UPSERT (INSERT OR REPLACE equivalent) via ON CONFLICT:
+        - If topic_key not seen before → insert with count=1
+        - If already seen → increment count + update last_seen + update display
+
+        topic_key is lowercased for case-insensitive deduplication:
+        "Photosynthesis" and "photosynthesis" are the same concept.
+        display preserves the most-recent LLM extraction form (mixed case, natural).
+        """
+        if not topic or not topic.strip():
+            return
+        topic_key = topic.lower().strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO mastery (topic_key, display)
+                VALUES (?, ?)
+                ON CONFLICT(topic_key) DO UPDATE SET
+                    count     = count + 1,
+                    last_seen = datetime('now'),
+                    display   = excluded.display
+                """,
+                (topic_key, topic),
+            )
+            conn.commit()
+
+    def get_mastery_summary(self, limit: int = 5) -> list[dict]:
+        """
+        Return top topics by exploration count, most explored first.
+
+        Each entry: {"topic": str, "count": int, "level": str}
+        Levels: "curious" (1x) | "learning" (2x) | "practiced" (3-4x) | "expert" (5+x)
+
+        Used by:
+          - load_memory → injects into state as mastered_topics
+          - greet_response → "You've explored photosynthesis 4 times!"
+          - help_response → LLM context: "she knows the basics, go deeper"
+          - chat_loop !mastery command → pretty table display
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT display, count FROM mastery ORDER BY count DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "topic": row["display"],
+                    "count": row["count"],
+                    "level": _mastery_level(row["count"]),
+                }
+                for row in rows
+            ]
+
     def get_last_session_summary(self) -> str:
         """
         Return the most recent session summary, or '' if none exists yet.
@@ -241,6 +330,7 @@ class MemoryStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM topics")
             conn.execute("DELETE FROM sessions")
+            conn.execute("DELETE FROM mastery")
             conn.execute(
                 "UPDATE profile SET session_count = 0, total_turns = 0 WHERE id = 1"
             )

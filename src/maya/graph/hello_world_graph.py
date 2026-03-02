@@ -132,19 +132,25 @@ def load_memory(state: MayaState) -> dict:
         profile = store.get_profile()
         recent = store.get_recent_topics(limit=3)
         last_summary = store.get_last_session_summary()   # Session 9: episodic
+        mastery = store.get_mastery_summary(limit=5)      # Session 10: procedural
     except Exception:
         profile = {"user_name": "Srinika", "session_count": 0, "total_turns": 0}
         recent = []
         last_summary = ""
+        mastery = []
+
+    practiced = [m for m in mastery if m["count"] >= 3]
 
     return {
         "user_name":            profile["user_name"],
         "session_count":        profile["session_count"],
         "recent_topics":        recent,
         "last_session_summary": last_summary,             # Session 9
+        "mastered_topics":      mastery,                  # Session 10
         "steps": current_steps + [
             f"[load_memory] → session_count={profile['session_count']}, "
-            f"{len(recent)} recent topic(s)"
+            f"{len(recent)} recent topic(s), "
+            f"{len(practiced)} practiced topic(s)"
         ],
     }
 
@@ -216,6 +222,8 @@ def save_memory(state: MayaState) -> dict:
     try:
         store = MemoryStore(db_path=db_path)
         store.log_turn(user_input, intent, session_id=session_id, topic=topic)
+        if topic:
+            store.update_mastery(topic)   # Session 10: increment procedural count
         log_status = f"ok (topic: {topic!r})" if topic else "ok (no topic)"
     except Exception as e:
         log_status = f"error: {e}"
@@ -335,46 +343,58 @@ def greet_response(state: MayaState) -> dict:
     session_count = state.get("session_count", 0)
     recent_topics = state.get("recent_topics", [])
     last_summary = state.get("last_session_summary", "")   # Session 9: episodic
+    mastered = state.get("mastered_topics", [])            # Session 10: procedural
+
+    # ── Session 10: build mastery line (shown only if a topic is "practiced" 3+x) ──
+    practiced = [m for m in mastered if m["count"] >= 3]
+    mastery_line = ""
+    if practiced:
+        top = practiced[0]
+        level_word = {"practiced": "getting really good at", "expert": "an expert in"}.get(
+            top["level"], "explored a lot"
+        )
+        mastery_line = (
+            f"You're {level_word} {top['topic']} ({top['count']}x) — keep it up!"
+        )
 
     if session_count > 1 and last_summary:
-        # ── Best case: episodic summary from the previous session ─────────────
-        # "Srinika explored gravity and the water cycle."
-        # Written by farewell_response background thread last time she said bye.
+        # ── Best case: episodic summary + optional mastery shoutout ──────────
+        mastery_suffix = f"\n{mastery_line}" if mastery_line else ""
         greetings = {
             "english": (
                 f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
-                f"{last_summary}\n"
+                f"{last_summary}{mastery_suffix}\n"
                 "What shall we explore today?"
             ),
             "hindi": (
                 f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
-                f"{last_summary}\n"
+                f"{last_summary}{mastery_suffix}\n"
                 "Aaj kya seekhna chahti ho?"
             ),
             "hinglish": (
                 f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
-                f"{last_summary}\n"
+                f"{last_summary}{mastery_suffix}\n"
                 "Aaj kya explore karna hai?"
             ),
         }
     elif session_count > 1 and recent_topics:
-        # ── Fallback: show clean semantic topics (not raw user_input) ─────────
-        # e.g. ["photosynthesis", "gravity"] → "Last time you explored: photosynthesis, gravity."
+        # ── Fallback: semantic topics + optional mastery shoutout ─────────────
         topic_list = ", ".join(t[:40] for t in recent_topics[:2])
+        mastery_suffix = f"\n{mastery_line}" if mastery_line else ""
         greetings = {
             "english": (
                 f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
-                f"Last time you explored: {topic_list}.\n"
+                f"Last time you explored: {topic_list}.{mastery_suffix}\n"
                 "What shall we explore today?"
             ),
             "hindi": (
                 f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
-                f"Pichhli baar tumne {topic_list} ke baare mein seekha tha.\n"
+                f"Pichhli baar tumne {topic_list} ke baare mein seekha tha.{mastery_suffix}\n"
                 "Aaj kya seekhna chahti ho?"
             ),
             "hinglish": (
                 f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
-                f"Last time tumne {topic_list} explore kiya tha.\n"
+                f"Last time tumne {topic_list} explore kiya tha.{mastery_suffix}\n"
                 "Aaj kya explore karna hai?"
             ),
         }
@@ -526,7 +546,21 @@ def math_tutor_response(state: MayaState) -> dict:
     if not history or history[-1].get("role") != "user":
         history = history + [{"role": "user", "content": state["user_input"]}]
 
-    messages = [{"role": "system", "content": _build_math_prompt(language)}] + history
+    system_content = _build_math_prompt(language)
+
+    # Session 10: mastery context for math too
+    mastered = state.get("mastered_topics", [])
+    practiced_math = [m for m in mastered if m["count"] >= 2]
+    if practiced_math:
+        mastery_ctx = ", ".join(
+            f"{m['topic']} ({m['count']}x)" for m in practiced_math[:3]
+        )
+        system_content += (
+            f"\n\nMastery context: Srinika has explored these before: {mastery_ctx}. "
+            "Build on what she knows — skip basics she's already seen, go deeper."
+        )
+
+    messages = [{"role": "system", "content": system_content}] + history
 
     response, provider = call_llm_tiered(
         messages, is_online, fallback_error_prefix="MAYA Math Tutor"
@@ -569,6 +603,19 @@ def help_response(state: MayaState) -> dict:
     if recent_topics:
         topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])
         system_content += f"\n\nContext: Srinika has previously asked about {topic_list}. You can refer back to these if relevant."
+
+    # Session 10: inject mastery context so MAYA builds on what Srinika knows
+    mastered = state.get("mastered_topics", [])
+    practiced = [m for m in mastered if m["count"] >= 2]
+    if practiced:
+        mastery_ctx = ", ".join(
+            f"{m['topic']} ({m['count']}x, {m['level']})" for m in practiced[:3]
+        )
+        system_content += (
+            f"\n\nMastery context: Srinika has explored these topics before: {mastery_ctx}. "
+            "She already knows the basics of these — go deeper, challenge her thinking, "
+            "connect to new concepts she hasn't seen yet."
+        )
 
     messages = [{"role": "system", "content": system_content}] + history
 

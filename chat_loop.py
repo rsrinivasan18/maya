@@ -61,7 +61,7 @@ console = Console()
 
 def print_header(voice_mode: bool = False) -> None:
     mode_line = "Voice mode ON  |  Speak when prompted" if voice_mode else \
-                "bye/alvida to exit  |  !history  |  !debug  |  !clear  |  !reset-memory"
+                "bye/alvida to exit  |  !history  |  !mastery  |  !debug  |  !clear  |  !reset-memory"
     console.print(
         Panel.fit(
             Text.assemble(
@@ -115,6 +115,31 @@ def print_history(history: list[dict]) -> None:
             turn += 1
         table.add_row(row_turn, role, display)
 
+    console.print(table)
+
+
+def print_mastery(mastery: list[dict]) -> None:
+    if not mastery:
+        console.print("[dim]No topics tracked yet. Start a conversation to build your mastery![/dim]")
+        return
+
+    table = Table(title="Srinika's Topic Mastery", border_style="magenta", show_lines=True)
+    table.add_column("Topic", style="cyan")
+    table.add_column("Times explored", style="white", justify="center")
+    table.add_column("Level", style="bold")
+
+    level_styles = {
+        "curious":   "[yellow]curious[/yellow]",
+        "learning":  "[blue]learning[/blue]",
+        "practiced": "[green]practiced[/green]",
+        "expert":    "[bold magenta]expert[/bold magenta]",
+    }
+    for m in mastery:
+        table.add_row(
+            m["topic"],
+            str(m["count"]),
+            level_styles.get(m["level"], m["level"]),
+        )
     console.print(table)
 
 
@@ -285,13 +310,17 @@ def run_chat(
                 console.print("[dim]History cleared. Fresh start![/dim]")
                 continue
 
+            if user_input.lower() == "!mastery":
+                print_mastery(memory.get_mastery_summary(limit=15))
+                continue
+
             if user_input.lower() == "!reset-memory":
                 memory.reset()                  # clears tables in-place (Windows-safe)
                 session_id = memory.start_session()
                 message_history = []
                 turn_count = 0
                 console.print(
-                    "[yellow]Memory reset![/yellow] [dim]All sessions and topics cleared. "
+                    "[yellow]Memory reset![/yellow] [dim]All sessions, topics and mastery cleared. "
                     f"Starting fresh as session #{session_id}.[/dim]"
                 )
                 continue
