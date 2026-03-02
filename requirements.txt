@@ -22,8 +22,11 @@ ollama>=0.6.0                  # Ollama Python client (llama3.2:3b runs locally)
 
 # ─── Session 8: Online LLM Tiers (tiered fallback: Sarvam → Claude → OpenAI → Ollama) ──
 sarvamai>=0.1.0                # Sarvam API — Tier 1 (24B Hindi/Indic model, sarvam-m)
-anthropic>=0.40.0              # Claude API — Tier 2 (lazy import, skipped if key absent)
-openai>=1.0.0                  # OpenAI API — Tier 3
+anthropic>=0.40.0              # Claude API — Tier 2 (required by litellm anthropic provider)
+openai>=1.0.0                  # OpenAI API — Tier 3 (required by litellm openai/ollama providers)
+
+# ─── Session 11: LiteLLM — unified LLM interface ───────────────────────────────
+litellm>=1.0.0                 # Single call pattern for all providers: Sarvam/Claude/OpenAI/Ollama
 
 # ─── Week 2: Speech-to-Text ────────────────────────────────────────────────────
 faster-whisper>=1.0.0          # STT - 4x faster than openai-whisper, int8 on CPU

@@ -1,7 +1,7 @@
 """
-MAYA LLM Router - Session 8 Step 3
-=====================================
-Tiered LLM fallback chain for online/offline routing.
+MAYA LLM Router - Session 11 (LiteLLM refactor)
+=================================================
+Tiered LLM fallback chain using LiteLLM as a unified interface.
 
 Tier order (online):   Sarvam API → Claude API → OpenAI API → Ollama
 Tier order (offline):  Ollama directly (no wasted network calls)
@@ -9,39 +9,101 @@ Tier order (offline):  Ollama directly (no wasted network calls)
 Each tier:
   - Only tried if the API key is present (settings.HAS_*_KEY)
   - If it raises ANY exception, silently falls to the next tier
-  - Uses lazy imports — if a package is not installed, that tier is skipped
+  - Uses litellm.completion() — identical call and response shape for every provider
 
 Returns (response_text, provider_label) so callers can log which tier was used.
 
 LEARNING NOTES for Srinivasan:
 --------------------------------
-Why tiered fallback?
-  Sarvam is best for Hindi/Hinglish — built specifically for Indian languages.
-  Claude and OpenAI are high quality but cost per token.
-  Ollama is free, local, offline-capable. Together they ensure Srinika
-  ALWAYS gets an answer — even if every API is down.
+Why LiteLLM?
+  Before Session 11, every provider needed its own code:
+    - Sarvam:    urllib.request + json parsing
+    - Claude:    anthropic client, separate system/chat message split
+    - OpenAI:    openai client, result.choices[0].message.content
+    - Ollama:    ollama.chat(), result.message.content (dict!)
 
-Why lazy imports (import inside try blocks)?
-  - anthropic and openai are optional packages
-  - If they're not installed, the ImportError is caught and we skip that tier
-  - No hard crash — graceful degradation
+  Each one had a different response shape and error type.
+  Adding a 5th provider meant writing a 5th code path.
 
-Why urllib.request for Sarvam (not requests)?
-  - urllib is Python built-in — zero new dependencies for the Sarvam tier
-  - We're just sending a JSON POST — urllib handles it fine
+  LiteLLM wraps all 100+ providers under ONE call:
+    response = litellm.completion(model="...", messages=messages)
+    text = response.choices[0].message.content    ← identical every time
 
-Why return (text, provider)?
-  - The caller logs it in steps: "[help_response/claude]"
-  - Visible in --debug trace so you can see which tier MAYA actually used
-  - Useful for learning, debugging, and cost tracking
+  Adding a new provider = ONE new line in _TIERS_ONLINE. That's it.
+
+Why keep the same function signature (call_llm_tiered)?
+  All graph nodes call call_llm_tiered(messages, is_online).
+  Keeping the signature identical means ZERO changes outside this file.
+  Tests still pass without modification — clean refactor.
+
+Sarvam model string:
+  "openai/sarvam-m" — LiteLLM's OpenAI-compatible custom endpoint pattern.
+  Sarvam's REST API follows the OpenAI spec, so LiteLLM treats it as a
+  custom OpenAI deployment. We pass api_base and extra_headers for auth.
+
+Ollama model string:
+  "ollama/llama3.2:3b" — LiteLLM connects to localhost:11434/v1 automatically.
+  No ollama Python package import needed (LiteLLM uses HTTP directly).
 """
 
-import json
 import os
-import urllib.request
+import litellm
 
 from src.maya.config.settings import settings
 
+# Silence LiteLLM's verbose startup and per-call logging
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
+
+
+# ── Tier definitions ───────────────────────────────────────────────────────────
+# Each entry: (provider_label, litellm_model_string, extra_kwargs)
+# Online tiers tried in order; first success wins.
+
+_SARVAM_KEY = os.getenv("SARVAM_API_KEY", "")
+
+_TIERS_ONLINE: list[tuple[str, str, dict]] = [
+    # Tier 1 — Sarvam: best Hindi/Hinglish quality, built for Indian languages
+    (
+        "sarvam",
+        "openai/sarvam-m",
+        {
+            "api_base": "https://api.sarvam.ai/v1",
+            "api_key": _SARVAM_KEY,
+            "extra_headers": {"api-subscription-key": _SARVAM_KEY},
+        },
+    ),
+    # Tier 2 — Claude: high quality, excellent at explanations and reasoning
+    (
+        "claude",
+        "anthropic/claude-haiku-4-5-20251001",
+        {},
+    ),
+    # Tier 3 — OpenAI: wide availability, cost-effective (gpt-4o-mini)
+    (
+        "openai",
+        "openai/gpt-4o-mini",
+        {},
+    ),
+]
+
+# Tier 4 — Ollama: always the final fallback; free, local, offline-capable
+_TIER_OLLAMA: tuple[str, str, dict] = ("ollama", "ollama/llama3.2:3b", {})
+
+
+# ── Key availability check ─────────────────────────────────────────────────────
+
+def _key_available(label: str) -> bool:
+    """Return True if the API key for this tier is present in settings."""
+    return {
+        "sarvam": settings.HAS_SARVAM_KEY,
+        "claude": settings.HAS_ANTHROPIC_KEY,
+        "openai": settings.HAS_OPENAI_KEY,
+        "ollama": True,  # Ollama needs no key
+    }.get(label, False)
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 def call_llm_tiered(
     messages: list[dict],
@@ -52,87 +114,36 @@ def call_llm_tiered(
     Call the best available LLM, falling back down the tier chain on any error.
 
     Args:
-        messages: Full message list including system prompt.
-                  Format: [{"role": "system"|"user"|"assistant", "content": str}, ...]
-        is_online: True if internet is reachable (from check_connectivity node in state).
+        messages:              Full message list including system prompt.
+                               Format: [{"role": "system"|"user"|"assistant", "content": str}, ...]
+        is_online:             True if internet is reachable (from check_connectivity node).
         fallback_error_prefix: Label for the final error message (e.g. "MAYA Math Tutor").
 
     Returns:
         (response_text, provider_label)
         provider_label is one of: "sarvam" | "claude" | "openai" | "ollama" | "error"
     """
-    if is_online:
-        # ── Tier 1: Sarvam API ─────────────────────────────────────────────────
-        # Best Hindi/Hinglish quality — built for Indian languages
-        if settings.HAS_SARVAM_KEY:
-            try:
-                sarvam_key = os.getenv("SARVAM_API_KEY", "")
-                payload = json.dumps(
-                    {"model": "sarvam-m", "messages": messages}
-                ).encode("utf-8")
-                req = urllib.request.Request(
-                    "https://api.sarvam.ai/v1/chat/completions",
-                    data=payload,
-                    headers={
-                        "api-subscription-key": sarvam_key,
-                        "Content-Type": "application/json",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"].strip(), "sarvam"
-            except Exception:
-                pass  # Fall through to Claude
+    # Build tier list: online providers first (if online), then Ollama always last
+    tiers = (_TIERS_ONLINE if is_online else []) + [_TIER_OLLAMA]
 
-        # ── Tier 2: Claude API ─────────────────────────────────────────────────
-        # High quality, fast, excellent at explanations and reasoning
-        if settings.HAS_ANTHROPIC_KEY:
-            try:
-                import anthropic as _anthropic
+    for label, model, kwargs in tiers:
+        if not _key_available(label):
+            continue  # Skip tiers without keys (e.g. no ANTHROPIC_API_KEY set)
+        try:
+            response = litellm.completion(
+                model=model,
+                messages=messages,
+                max_tokens=300,
+                timeout=15,
+                **kwargs,
+            )
+            text = response.choices[0].message.content or ""
+            return text.strip(), label
+        except Exception:
+            continue  # Silent fallback — try next tier
 
-                # Claude separates the system prompt from the chat messages list
-                system_content = " ".join(
-                    m["content"] for m in messages if m["role"] == "system"
-                )
-                chat_msgs = [m for m in messages if m["role"] != "system"]
-
-                client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-                result = client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=300,
-                    system=system_content,
-                    messages=chat_msgs,
-                )
-                return result.content[0].text.strip(), "claude"
-            except Exception:
-                pass  # Fall through to OpenAI
-
-        # ── Tier 3: OpenAI API ─────────────────────────────────────────────────
-        # Wide availability, cost-effective (gpt-4o-mini)
-        if settings.HAS_OPENAI_KEY:
-            try:
-                import openai as _openai
-
-                client = _openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-                result = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=messages,
-                    max_tokens=300,
-                )
-                return result.choices[0].message.content.strip(), "openai"
-            except Exception:
-                pass  # Fall through to Ollama
-
-    # ── Tier 4: Ollama — always the final fallback ─────────────────────────────
-    # Free, local, offline-capable. Works as long as `ollama serve` is running.
-    try:
-        import ollama as _ollama
-
-        result = _ollama.chat(model="llama3.2:3b", messages=messages)
-        return result.message.content.strip(), "ollama"
-    except Exception as e:
-        return (
-            f"Hmm, {fallback_error_prefix} is having trouble thinking right now! "
-            "Make sure Ollama is running: ollama serve. "
-            f"({e})"
-        ), "error"
+    # All tiers exhausted (shouldn't happen if Ollama is running)
+    return (
+        f"Hmm, {fallback_error_prefix} is having trouble thinking right now! "
+        "Make sure Ollama is running: ollama serve."
+    ), "error"
