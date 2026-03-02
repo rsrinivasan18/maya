@@ -37,6 +37,7 @@ numpy>=1.24.0                  # Audio array handling
 piper-tts>=1.4.0               # TTS - neural offline voices via ONNX
 # huggingface-hub already installed as faster-whisper dependency (voice download)
 
-# ─── Phase 2: Web Backend (uncomment when ready) ───────────────────────────────
-# fastapi>=0.115.0
-# uvicorn>=0.30.0
+# ─── Session 11: Web Backend (FastAPI + WebSocket) ────────────────────────────
+fastapi>=0.115.0               # Async web framework — serves UI + WebSocket chat endpoint
+uvicorn>=0.30.0                # ASGI server — run with: uvicorn src.maya.web.app:app --reload
+websockets>=12.0               # WebSocket support for uvicorn

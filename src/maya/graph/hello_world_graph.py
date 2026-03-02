@@ -562,8 +562,11 @@ def math_tutor_response(state: MayaState) -> dict:
 
     messages = [{"role": "system", "content": system_content}] + history
 
+    preferred_model = state.get("preferred_model") or None  # None → auto tiered
     response, provider = call_llm_tiered(
-        messages, is_online, fallback_error_prefix="MAYA Math Tutor"
+        messages, is_online,
+        fallback_error_prefix="MAYA Math Tutor",
+        force_provider=preferred_model,
     )
 
     return {
@@ -619,7 +622,8 @@ def help_response(state: MayaState) -> dict:
 
     messages = [{"role": "system", "content": system_content}] + history
 
-    response, provider = call_llm_tiered(messages, is_online)
+    preferred_model = state.get("preferred_model") or None  # None → auto tiered
+    response, provider = call_llm_tiered(messages, is_online, force_provider=preferred_model)
 
     return {
         "response": response,

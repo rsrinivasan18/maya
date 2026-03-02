@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MAYA – Your Learning Companion</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header id="header">
+    <button id="sidebar-toggle" class="icon-btn" title="Toggle history" aria-label="Toggle sidebar">
+      ☰
+    </button>
+    <span class="logo">🦋 MAYA</span>
+    <span id="status-dot" class="status-dot offline" title="Connection status"></span>
+    <span id="status-text" class="status-text">connecting…</span>
+
+    <div class="header-controls">
+      <div class="select-group">
+        <label for="model-select">Model</label>
+        <select id="model-select" title="Choose which LLM MAYA uses">
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+      <div class="select-group">
+        <label for="agent-select">Agent</label>
+        <select id="agent-select" title="Choose which agent persona responds">
+          <option value="auto">Auto</option>
+          <option value="science">Science</option>
+          <option value="math">Math</option>
+          <option value="story">Story</option>
+          <option value="general">General</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <!-- Overlay for mobile sidebar -->
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+  <!-- ── Body ────────────────────────────────────────────────────────── -->
+  <div id="body">
+
+    <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+    <aside id="sidebar" class="sidebar">
+
+      <!-- Avatar -->
+      <div class="avatar-section">
+        <div id="avatar" class="avatar" data-state="idle" aria-label="MAYA avatar">
+          <span id="avatar-emoji">🦋</span>
+        </div>
+        <div id="avatar-label" class="avatar-label">idle</div>
+
+        <!-- Character picker -->
+        <div class="char-picker" role="group" aria-label="Choose MAYA character">
+          <span class="char-btn active" data-char="🦋" title="Butterfly">🦋</span>
+          <span class="char-btn" data-char="🤖" title="Robot">🤖</span>
+          <span class="char-btn" data-char="🦊" title="Fox">🦊</span>
+          <span class="char-btn" data-char="🐱" title="Cat">🐱</span>
+          <span class="char-btn" data-char="🌟" title="Star">🌟</span>
+          <span class="char-btn" data-char="🧠" title="Brain">🧠</span>
+          <span class="char-btn" data-char="🦄" title="Unicorn">🦄</span>
+          <span class="char-btn" data-char="🐙" title="Octopus">🐙</span>
+        </div>
+      </div>
+
+      <!-- Recent Topics -->
+      <div class="sidebar-section">
+        <h3>Recent Topics</h3>
+        <ul id="recent-topics" class="topic-list">
+          <li class="empty">No topics yet</li>
+        </ul>
+      </div>
+
+      <!-- Mastery -->
+      <div class="sidebar-section">
+        <h3>Mastery</h3>
+        <ul id="mastery-list" class="mastery-list">
+          <li class="empty">Start exploring!</li>
+        </ul>
+      </div>
+
+    </aside>
+
+    <!-- ── Chat main ─────────────────────────────────────────────────── -->
+    <main id="chat-main">
+
+      <!-- Message thread -->
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Conversation">
+        <!-- Messages added by JS -->
+      </div>
+
+      <!-- Thinking indicator (hidden until LLM is working) -->
+      <div id="thinking" class="thinking-indicator" hidden aria-live="polite" aria-label="MAYA is thinking">
+        <span id="thinking-emoji">🦋</span>
+        <div class="thinking-dots" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="thinking-text">thinking…</span>
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <textarea
+          id="input"
+          placeholder="Ask MAYA anything… (Enter to send, Shift+Enter for new line)"
+          rows="1"
+          aria-label="Message input"
+          autocomplete="off"
+          spellcheck="true"
+        ></textarea>
+        <button id="send-btn" class="send-btn" disabled title="Send message (Enter)" aria-label="Send">
+          ▶
+        </button>
+      </div>
+
+    </main>
+  </div><!-- /#body -->
+
+</div><!-- /#app -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>

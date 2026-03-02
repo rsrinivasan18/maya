@@ -94,5 +94,11 @@ class MayaState(TypedDict):
     # Loaded by load_memory; surfaced in greet_response + LLM system prompts.
     mastered_topics: NotRequired[list[dict]]
 
+    # ── Web UI Preferences (Session 11) ────────────────────────────────────────
+    # Set by the web frontend; passed from WebSocket message into graph state.
+    # NotRequired → terminal (chat_loop.py) works unchanged without setting these.
+    preferred_model:  NotRequired[str]   # "auto"|"sarvam"|"claude"|"openai"|"ollama"
+    agent_override:   NotRequired[str]   # "auto"|"science"|"math"|"story"|"general"
+
     # ── Debug / Learning visibility ────────────────────────────────────────────
     steps: list[str]         # Log entry from each node - shows graph execution flow

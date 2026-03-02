@@ -109,6 +109,7 @@ def call_llm_tiered(
     messages: list[dict],
     is_online: bool,
     fallback_error_prefix: str = "MAYA",
+    force_provider: str | None = None,
 ) -> tuple[str, str]:
     """
     Call the best available LLM, falling back down the tier chain on any error.
@@ -118,13 +119,24 @@ def call_llm_tiered(
                                Format: [{"role": "system"|"user"|"assistant", "content": str}, ...]
         is_online:             True if internet is reachable (from check_connectivity node).
         fallback_error_prefix: Label for the final error message (e.g. "MAYA Math Tutor").
+        force_provider:        Optional override from the web UI model selector.
+                               If set (and not "auto"), skip directly to that provider,
+                               then fall back to Ollama on failure.
+                               Values: "sarvam"|"claude"|"openai"|"ollama"|None|"auto"
 
     Returns:
         (response_text, provider_label)
         provider_label is one of: "sarvam" | "claude" | "openai" | "ollama" | "error"
     """
-    # Build tier list: online providers first (if online), then Ollama always last
-    tiers = (_TIERS_ONLINE if is_online else []) + [_TIER_OLLAMA]
+    # Build tier list
+    if force_provider and force_provider != "auto":
+        # Force a specific provider; Ollama is always the safety-net fallback
+        all_tiers = _TIERS_ONLINE + [_TIER_OLLAMA]
+        forced = [t for t in all_tiers if t[0] == force_provider]
+        tiers = forced + [_TIER_OLLAMA]
+    else:
+        # Auto mode: online providers first (if online), then Ollama always last
+        tiers = (_TIERS_ONLINE if is_online else []) + [_TIER_OLLAMA]
 
     for label, model, kwargs in tiers:
         if not _key_available(label):
