@@ -26,10 +26,17 @@ class Settings:
     LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "maya-assistant")
     # Note: LANGCHAIN_API_KEY is read automatically by LangChain from environment
 
-    # ── Online LLM APIs (Week 3) ──────────────────────────────────────────────
+    # ── Online LLM APIs (tiered fallback: Sarvam → Claude → OpenAI → Ollama) ──
     # Keys are read from env only - never stored as strings in code
+    HAS_SARVAM_KEY:    bool = bool(os.getenv("SARVAM_API_KEY", ""))
     HAS_ANTHROPIC_KEY: bool = bool(os.getenv("ANTHROPIC_API_KEY", ""))
-    HAS_SARVAM_KEY: bool = bool(os.getenv("SARVAM_API_KEY", ""))
+    HAS_OPENAI_KEY:    bool = bool(os.getenv("OPENAI_API_KEY", ""))
+
+    # ── Connectivity Check ────────────────────────────────────────────────────
+    # Used by ConnectivityChecker to determine online/offline at runtime
+    CONNECTIVITY_HOST:    str   = os.getenv("MAYA_CONNECTIVITY_HOST",     "8.8.8.8")
+    CONNECTIVITY_PORT:    int   = int(os.getenv("MAYA_CONNECTIVITY_PORT",  "53"))
+    CONNECTIVITY_TIMEOUT: float = float(os.getenv("MAYA_CONNECTIVITY_TIMEOUT", "2.0"))
 
     # ── Ollama Local LLM ──────────────────────────────────────────────────────
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -47,8 +54,11 @@ class Settings:
             f"offline={self.OFFLINE_MODE} | "
             f"language={self.LANGUAGE} | "
             f"tracing={self.LANGCHAIN_TRACING_V2} | "
-            f"anthropic_key={'yes' if self.HAS_ANTHROPIC_KEY else 'no'} | "
-            f"sarvam_key={'yes' if self.HAS_SARVAM_KEY else 'no'}"
+            f"sarvam={'yes' if self.HAS_SARVAM_KEY else 'no'} | "
+            f"anthropic={'yes' if self.HAS_ANTHROPIC_KEY else 'no'} | "
+            f"openai={'yes' if self.HAS_OPENAI_KEY else 'no'} | "
+            f"connectivity={self.CONNECTIVITY_HOST}:{self.CONNECTIVITY_PORT} "
+            f"(timeout={self.CONNECTIVITY_TIMEOUT}s)"
         )
 
 

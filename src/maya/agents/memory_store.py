@@ -1,11 +1,12 @@
 """
-MAYA Memory Store - Session 5
-==============================
+MAYA Memory Store - Session 9 Update
+======================================
 Persistent SQLite memory for MAYA.
 
 Stores:
   - User profile: user name, session count, total turns
-  - Topic log: every user message + intent (for recent topics recall)
+  - Topic log: every user message + semantic topic (extracted by LLM) + intent
+  - Session summaries: one-sentence episodic summary per session (from farewell node)
 
 DB location: ~/.maya/memory.db
 
@@ -26,6 +27,21 @@ Why one profile row? (CHECK id = 1)
   - SQLite trick: enforce exactly one row with a CHECK constraint
   - INSERT OR IGNORE seeds it on first run, never duplicates
   - Much simpler than a key-value table for a single-user app
+
+Session 9 — Three memory improvements:
+  1. Semantic memory (topic column):
+     Each turn stores a 2-4 word LLM-extracted topic (e.g. "photosynthesis",
+     "Newton laws motion") instead of the raw user_input verbatim.
+     get_recent_topics() returns topic (or falls back to message if blank).
+
+  2. Episodic memory (sessions table):
+     On farewell, a background thread generates a 1-sentence session summary
+     (e.g. "Srinika explored gravity and the water cycle").
+     Loaded next session and shown in the greeting: Srinika sees what she
+     studied last time, not a mechanical transcript of her own words.
+
+  3. Procedural memory (future):
+     Track concepts mastered — not implemented yet.
 """
 
 import sqlite3
@@ -42,15 +58,18 @@ class MemoryStore:
     Tables
     ------
     profile:  Exactly one row — user_name, session_count, total_turns
-    topics:   Append-only turn log — session_id, message, intent, timestamp
+    topics:   Append-only turn log — session_id, message, topic, intent, timestamp
+    sessions: One row per session — session_id, summary (episodic)
 
     Usage
     -----
         store = MemoryStore()
-        session_id = store.start_session()      # once at startup
-        profile = store.get_profile()           # {user_name, session_count, total_turns}
-        recent = store.get_recent_topics(3)     # ["What is gravity?", ...]
-        store.log_turn("What is gravity?", "question", session_id)
+        session_id = store.start_session()           # once at startup
+        profile = store.get_profile()               # {user_name, session_count, total_turns}
+        recent = store.get_recent_topics(3)         # ["photosynthesis", "Newton laws", ...]
+        store.log_turn("What is gravity?", "question", session_id, topic="gravity")
+        store.save_session_summary(session_id, "Srinika explored gravity and light.")
+        summary = store.get_last_session_summary()  # "Srinika explored gravity and light."
     """
 
     def __init__(self, db_path: str | None = None) -> None:
@@ -81,10 +100,30 @@ class MemoryStore:
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER NOT NULL DEFAULT 0,
                     message    TEXT    NOT NULL,
+                    topic      TEXT    NOT NULL DEFAULT '',
                     intent     TEXT    NOT NULL DEFAULT 'general',
                     timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
                 )
             """)
+            # Session 9: safe migration for existing DBs that predate the topic column.
+            # ALTER TABLE ADD COLUMN fails silently if the column already exists.
+            try:
+                conn.execute(
+                    "ALTER TABLE topics ADD COLUMN topic TEXT NOT NULL DEFAULT ''"
+                )
+            except Exception:
+                pass  # Column already exists — ignore
+
+            # Session 9: episodic session summaries table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL DEFAULT 0,
+                    summary    TEXT    NOT NULL DEFAULT '',
+                    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+
             # Seed exactly one profile row if the DB is brand new.
             # INSERT OR IGNORE: if id=1 already exists, does nothing.
             conn.execute("""
@@ -125,24 +164,73 @@ class MemoryStore:
             return dict(row)
 
     def get_recent_topics(self, limit: int = 3) -> list[str]:
-        """Return the last `limit` user messages, most recent first."""
+        """
+        Return the last `limit` semantic topics, most recent first.
+
+        Returns the LLM-extracted topic if available (non-empty), otherwise
+        falls back to the raw message. This gives human-readable topics like
+        "photosynthesis" instead of verbatim "What is photosynthesis exactly?".
+        """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT message FROM topics ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT message, topic FROM topics ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
-            return [row["message"] for row in rows]
+            return [row["topic"] if row["topic"] else row["message"] for row in rows]
 
-    def log_turn(self, message: str, intent: str, session_id: int = 0) -> None:
-        """Append a user message to the topics log and increment total_turns."""
+    def log_turn(
+        self,
+        message: str,
+        intent: str,
+        session_id: int = 0,
+        topic: str = "",
+    ) -> None:
+        """
+        Append a user turn to the topics log and increment total_turns.
+
+        Args:
+            message:    Raw user input (always stored for audit / fallback display).
+            intent:     Classified intent (question, math, general, etc.).
+            session_id: Current session number from start_session().
+            topic:      LLM-extracted 2-4 word semantic summary (e.g. "gravity waves").
+                        If blank, get_recent_topics() will fall back to message.
+        """
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO topics (session_id, message, intent) VALUES (?, ?, ?)",
-                (session_id, message, intent),
+                "INSERT INTO topics (session_id, message, topic, intent) VALUES (?, ?, ?, ?)",
+                (session_id, message, topic, intent),
             )
             conn.execute(
                 "UPDATE profile SET total_turns = total_turns + 1 WHERE id = 1"
             )
             conn.commit()
+
+    def save_session_summary(self, session_id: int, summary: str) -> None:
+        """
+        Save a one-sentence episodic summary of the session.
+
+        Called from a background thread in farewell_response after Srinika
+        says goodbye. The summary is loaded next session in load_memory and
+        shown in greet_response so she sees what she explored last time.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions (session_id, summary) VALUES (?, ?)",
+                (session_id, summary),
+            )
+            conn.commit()
+
+    def get_last_session_summary(self) -> str:
+        """
+        Return the most recent session summary, or '' if none exists yet.
+
+        The first session never has a summary (no farewell happened before it).
+        Subsequent sessions return the summary written when the previous session ended.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT summary FROM sessions ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            return row["summary"] if row else ""
 
     def reset(self) -> None:
         """
@@ -152,6 +240,7 @@ class MemoryStore:
         """
         with self._connect() as conn:
             conn.execute("DELETE FROM topics")
+            conn.execute("DELETE FROM sessions")
             conn.execute(
                 "UPDATE profile SET session_count = 0, total_turns = 0 WHERE id = 1"
             )

@@ -19,11 +19,11 @@ pytest>=8.0.0
 
 # ─── Week 3: Local LLM via Ollama ──────────────────────────────────────────────
 ollama>=0.6.0                  # Ollama Python client (llama3.2:3b runs locally)
-# langchain-anthropic>=0.3.0     # Claude API (future)
-# langchain-ollama>=0.2.0        # LangChain Ollama wrapper (future)
 
-# ─── Week 3: Sarvam AI (Hindi/English bilingual model) ─────────────────────────
-# sarvam-python                  # Check PyPI for official package name
+# ─── Session 8: Online LLM Tiers (tiered fallback: Sarvam → Claude → OpenAI → Ollama) ──
+sarvamai>=0.1.0                # Sarvam API — Tier 1 (24B Hindi/Indic model, sarvam-m)
+anthropic>=0.40.0              # Claude API — Tier 2 (lazy import, skipped if key absent)
+openai>=1.0.0                  # OpenAI API — Tier 3
 
 # ─── Week 2: Speech-to-Text ────────────────────────────────────────────────────
 faster-whisper>=1.0.0          # STT - 4x faster than openai-whisper, int8 on CPU

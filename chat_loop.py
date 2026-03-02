@@ -47,6 +47,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from src.maya.agents.connectivity_checker import ConnectivityChecker
 from src.maya.agents.memory_store import MemoryStore
 from src.maya.graph.hello_world_graph import maya_graph
 from src.maya.config.settings import settings
@@ -161,8 +162,43 @@ def run_chat(
     session_id = memory.start_session()
     console.print(
         f"[dim]Memory: session #{session_id} | "
-        f"{memory.get_profile()['total_turns']} total turns across all sessions[/dim]\n"
+        f"{memory.get_profile()['total_turns']} total turns across all sessions[/dim]"
     )
+
+    # ── Check connectivity once at session start (used for spinner label) ──────
+    # The graph re-checks per-turn for accurate routing; this is just for display.
+    session_online = ConnectivityChecker().is_online()
+    if not session_online:
+        active_tier, mode_display, spinner_msg = (
+            "ollama",
+            "[yellow]Offline[/yellow] [dim](Ollama only — may take a moment)[/dim]",
+            "Let me think... (Ollama is running locally, may take 5-15s)",
+        )
+    elif settings.HAS_SARVAM_KEY:
+        active_tier, mode_display, spinner_msg = (
+            "sarvam",
+            "[green]Online[/green] [dim](Sarvam ready — fast Hindi/Hinglish)[/dim]",
+            "Asking Sarvam...",
+        )
+    elif settings.HAS_ANTHROPIC_KEY:
+        active_tier, mode_display, spinner_msg = (
+            "claude",
+            "[green]Online[/green] [dim](Claude ready)[/dim]",
+            "Asking Claude...",
+        )
+    elif settings.HAS_OPENAI_KEY:
+        active_tier, mode_display, spinner_msg = (
+            "openai",
+            "[green]Online[/green] [dim](OpenAI ready)[/dim]",
+            "Asking OpenAI...",
+        )
+    else:
+        active_tier, mode_display, spinner_msg = (
+            "ollama",
+            "[yellow]Online (no API keys — Ollama mode)[/yellow]",
+            "Let me think... (may take a moment)",
+        )
+    console.print(f"[dim]Mode: {mode_display}[/dim]\n")
 
     # ── Set up TTS if speak mode ───────────────────────────────────────────────
     tts = None
@@ -269,31 +305,32 @@ def run_chat(
             {"role": "user", "content": user_input}
         ]
 
-        # ── Run the graph ─────────────────────────────────────────────────────
-        result = maya_graph.invoke(
-            {
-                "user_input": user_input,
-                "language": "",
-                "intent": "",
-                "response": "",
-                "steps": [],
-                "message_history": history_with_user,
-                # Annotated[list, operator.add]:
-                # If any node returns {"message_history": [new_msg]},
-                # LangGraph APPENDS it to history_with_user automatically
-                "session_id": session_id,   # for save_memory to tag the turn
-            },
-            config={
-                # LangSmith: label each turn clearly in the dashboard
-                "run_name": f"MAYA-turn-{turn_count}",
-                "metadata": {
-                    "session_id": session_id,
-                    "turn": turn_count,
-                    "user_name": "Srinika",
+        # ── Run the graph (with spinner so Srinika knows MAYA is thinking) ──────
+        with console.status(f"[bold green]{spinner_msg}[/bold green]"):
+            result = maya_graph.invoke(
+                {
+                    "user_input": user_input,
+                    "language": "",
+                    "intent": "",
+                    "response": "",
+                    "steps": [],
+                    "message_history": history_with_user,
+                    # Annotated[list, operator.add]:
+                    # If any node returns {"message_history": [new_msg]},
+                    # LangGraph APPENDS it to history_with_user automatically
+                    "session_id": session_id,   # for save_memory to tag the turn
                 },
-                "tags": ["maya", "production"],
-            },
-        )
+                config={
+                    # LangSmith: label each turn clearly in the dashboard
+                    "run_name": f"MAYA-turn-{turn_count}",
+                    "metadata": {
+                        "session_id": session_id,
+                        "turn": turn_count,
+                        "user_name": "Srinika",
+                    },
+                    "tags": ["maya", "production"],
+                },
+            )
 
         # ── Display ───────────────────────────────────────────────────────────
         if show_debug:

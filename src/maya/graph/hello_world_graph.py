@@ -37,8 +37,12 @@ UPDATED GRAPH FLOW:
      END       END       END
 """
 
+import threading
+
 from langgraph.graph import StateGraph, END, START
 
+from src.maya.agents.connectivity_checker import ConnectivityChecker
+from src.maya.agents.llm_router import call_llm_tiered
 from src.maya.agents.memory_store import MemoryStore
 from src.maya.models.state import MayaState
 
@@ -127,17 +131,43 @@ def load_memory(state: MayaState) -> dict:
         store = MemoryStore(db_path=db_path)
         profile = store.get_profile()
         recent = store.get_recent_topics(limit=3)
+        last_summary = store.get_last_session_summary()   # Session 9: episodic
     except Exception:
         profile = {"user_name": "Srinika", "session_count": 0, "total_turns": 0}
         recent = []
+        last_summary = ""
 
     return {
-        "user_name":     profile["user_name"],
-        "session_count": profile["session_count"],
-        "recent_topics": recent,
+        "user_name":            profile["user_name"],
+        "session_count":        profile["session_count"],
+        "recent_topics":        recent,
+        "last_session_summary": last_summary,             # Session 9
         "steps": current_steps + [
             f"[load_memory] → session_count={profile['session_count']}, "
             f"{len(recent)} recent topic(s)"
+        ],
+    }
+
+
+def check_connectivity(state: MayaState) -> dict:
+    """
+    Node 0b (Session 8): Check internet access and inject result into state.
+
+    Calls ConnectivityChecker.is_online() — a lightweight TCP probe to 8.8.8.8:53.
+    Result flows downstream to LLM nodes so they can pick the right provider tier:
+      is_online=True  → try Sarvam → Claude → OpenAI → Ollama
+      is_online=False → go straight to Ollama (no wasted API calls)
+
+    Runs AFTER load_memory so memory is already populated before we hit the network.
+    """
+    current_steps = state.get("steps", [])
+
+    online = ConnectivityChecker().is_online()
+
+    return {
+        "is_online": online,
+        "steps": current_steps + [
+            f"[check_connectivity] → {'online' if online else 'offline'}"
         ],
     }
 
@@ -161,15 +191,37 @@ def save_memory(state: MayaState) -> dict:
             "steps": current_steps + ["[save_memory] → skipped (farewell)"],
         }
 
+    # ── Session 9: Extract a 2-4 word semantic topic via LLM ─────────────────
+    # Example: "What is photosynthesis?" → "photosynthesis"
+    # Stored in the topic column; get_recent_topics() returns this instead of
+    # the raw user_input so greet_response sounds natural, not mechanical.
+    is_online = state.get("is_online", False)
+    topic = ""
+    try:
+        topic_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Extract the main topic from the user's question in 2-4 words. "
+                    "Reply with ONLY those words — no punctuation, no explanation."
+                ),
+            },
+            {"role": "user", "content": user_input},
+        ]
+        extracted, _ = call_llm_tiered(topic_messages, is_online)
+        topic = extracted.strip()[:50]
+    except Exception:
+        topic = ""  # Graceful fallback — message is always stored too
+
     try:
         store = MemoryStore(db_path=db_path)
-        store.log_turn(user_input, intent, session_id=session_id)
-        log_status = "ok"
+        store.log_turn(user_input, intent, session_id=session_id, topic=topic)
+        log_status = f"ok (topic: {topic!r})" if topic else "ok (no topic)"
     except Exception as e:
         log_status = f"error: {e}"
 
     return {
-        "steps": current_steps + [f"[save_memory] → logged turn ({log_status})"],
+        "steps": current_steps + [f"[save_memory] → {log_status}"],
     }
 
 
@@ -282,29 +334,52 @@ def greet_response(state: MayaState) -> dict:
     current_steps = state["steps"]
     session_count = state.get("session_count", 0)
     recent_topics = state.get("recent_topics", [])
+    last_summary = state.get("last_session_summary", "")   # Session 9: episodic
 
-    if session_count > 1 and recent_topics:
-        # Returning visitor — personalised welcome
-        last_topic = recent_topics[0][:60]  # cap length for TTS
+    if session_count > 1 and last_summary:
+        # ── Best case: episodic summary from the previous session ─────────────
+        # "Srinika explored gravity and the water cycle."
+        # Written by farewell_response background thread last time she said bye.
         greetings = {
             "english": (
                 f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
-                f"Last time you asked about: \"{last_topic}\".\n"
+                f"{last_summary}\n"
                 "What shall we explore today?"
             ),
             "hindi": (
                 f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
-                f"Pichhli baar tumne poochha tha: \"{last_topic}\".\n"
+                f"{last_summary}\n"
                 "Aaj kya seekhna chahti ho?"
             ),
             "hinglish": (
                 f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
-                f"Last time tumne pucha tha: \"{last_topic}\".\n"
+                f"{last_summary}\n"
+                "Aaj kya explore karna hai?"
+            ),
+        }
+    elif session_count > 1 and recent_topics:
+        # ── Fallback: show clean semantic topics (not raw user_input) ─────────
+        # e.g. ["photosynthesis", "gravity"] → "Last time you explored: photosynthesis, gravity."
+        topic_list = ", ".join(t[:40] for t in recent_topics[:2])
+        greetings = {
+            "english": (
+                f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
+                f"Last time you explored: {topic_list}.\n"
+                "What shall we explore today?"
+            ),
+            "hindi": (
+                f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
+                f"Pichhli baar tumne {topic_list} ke baare mein seekha tha.\n"
+                "Aaj kya seekhna chahti ho?"
+            ),
+            "hinglish": (
+                f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
+                f"Last time tumne {topic_list} explore kiya tha.\n"
                 "Aaj kya explore karna hai?"
             ),
         }
     else:
-        # First visit ever (or load_memory not available)
+        # ── First visit ever (or load_memory not available) ───────────────────
         greetings = {
             "english": (
                 "Hello! I'm MAYA - your bilingual STEM companion!\n"
@@ -334,15 +409,69 @@ def greet_response(state: MayaState) -> dict:
     }
 
 
+def _summarize_session_background(
+    message_history: list[dict],
+    is_online: bool,
+    session_id: int,
+    db_path: str | None,
+) -> None:
+    """
+    Background thread: generate a 1-sentence episodic summary and save to SQLite.
+
+    Called (daemon=True) when Srinika says goodbye — fires after farewell_response
+    returns so it never delays the UX. MAYA's farewell message appears instantly;
+    the summary is written to the DB while she's reading it.
+
+    Session 9: Episodic memory — next time Srinika opens MAYA, greet_response
+    shows "Srinika explored gravity and the water cycle." instead of nothing.
+    """
+    if not message_history:
+        return
+
+    # Build a compact conversation digest (capped to keep the prompt small)
+    lines = []
+    for m in message_history:
+        role = "Srinika" if m["role"] == "user" else "MAYA"
+        text = m["content"][:120].replace("\n", " ")
+        lines.append(f"{role}: {text}")
+    conversation_digest = "\n".join(lines)[:800]
+
+    summary_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Summarize this children's learning conversation in ONE warm sentence. "
+                "Start with 'Srinika explored' or 'Srinika asked about'. "
+                "Be specific and encouraging. Maximum 20 words."
+            ),
+        },
+        {"role": "user", "content": conversation_digest},
+    ]
+
+    try:
+        summary, _ = call_llm_tiered(summary_messages, is_online)
+        store = MemoryStore(db_path=db_path)
+        store.save_session_summary(session_id, summary.strip())
+    except Exception:
+        pass  # Background — silent failure is OK; next session just won't have a summary
+
+
 def farewell_response(state: MayaState) -> dict:
     """
-    Node 3b: Warm goodbye in the detected language. NEW in Session 2.
+    Node 3b: Warm goodbye in the detected language.
 
-    The REPL checks intent == "farewell" to break the conversation loop.
+    Session 9 upgrade: fires a background thread (daemon=True) that generates
+    a 1-sentence episodic session summary after the farewell message is sent.
+    The summary is saved to SQLite and shown in greet_response next session.
+    This never delays the UX — MAYA's goodbye appears instantly.
     """
     language = state["language"]
     current_steps = state["steps"]
-    turn_count = len([m for m in state["message_history"] if m["role"] == "user"])
+    message_history = state["message_history"]
+    turn_count = len([m for m in message_history if m["role"] == "user"])
+    is_online = state.get("is_online", False)
+    session_id = state.get("session_id", 0)
+    db_path = state.get("memory_db_path") or None
 
     farewells = {
         "english": (
@@ -361,6 +490,14 @@ def farewell_response(state: MayaState) -> dict:
 
     response = farewells.get(language, farewells["english"])
 
+    # ── Session 9: Episodic summary in background (non-blocking) ─────────────
+    # Daemon thread: auto-killed if the process exits before it finishes.
+    threading.Thread(
+        target=_summarize_session_background,
+        args=(message_history, is_online, session_id, db_path),
+        daemon=True,
+    ).start()
+
     return {
         "response": response,
         "message_history": [{"role": "assistant", "content": response}],
@@ -370,106 +507,78 @@ def farewell_response(state: MayaState) -> dict:
 
 def math_tutor_response(state: MayaState) -> dict:
     """
-    Node 3c: Dedicated Math Tutor via Ollama (Session 6 - new agent!).
+    Node 3c: Dedicated Math Tutor with tiered LLM fallback (Session 8 upgrade).
 
     Separate from help_response so it has its own:
     - System prompt focused on step-by-step math teaching
     - Analogies using everyday Indian context (rupees, cricket scores, chai)
     - Practice problem at the end of each response
 
-    Same Ollama call pattern as help_response — only the system prompt differs.
-    This is the multi-agent principle: same model, different instructions = different agent.
+    Session 8: now uses call_llm_tiered — tries Sarvam/Claude/OpenAI when online,
+    falls back to Ollama when offline. The step log shows which tier was used.
     """
     language = state["language"]
     current_steps = state["steps"]
     message_history = state["message_history"]
+    is_online = state.get("is_online", False)
 
-    try:
-        import ollama
+    history = message_history
+    if not history or history[-1].get("role") != "user":
+        history = history + [{"role": "user", "content": state["user_input"]}]
 
-        history = message_history
-        if not history or history[-1].get("role") != "user":
-            history = history + [{"role": "user", "content": state["user_input"]}]
+    messages = [{"role": "system", "content": _build_math_prompt(language)}] + history
 
-        messages = [{"role": "system", "content": _build_math_prompt(language)}] + history
-
-        result = ollama.chat(
-            model="llama3.2:3b",
-            messages=messages,
-        )
-        response = result.message.content.strip()
-
-    except Exception as e:
-        response = (
-            "Hmm, my math brain isn't working right now! "
-            "Make sure Ollama is running with: ollama serve. "
-            f"Error: {e}"
-        )
+    response, provider = call_llm_tiered(
+        messages, is_online, fallback_error_prefix="MAYA Math Tutor"
+    )
 
     return {
         "response": response,
         "message_history": [{"role": "assistant", "content": response}],
         "steps": current_steps + [
-            f"[math_tutor_response/ollama] → language='{language}'"
+            f"[math_tutor_response/{provider}] → language='{language}'"
         ],
     }
 
 
 def help_response(state: MayaState) -> dict:
     """
-    Node 3d: General helpful response via Ollama LLM (Session 3 upgrade).
+    Node 3d: General helpful response with tiered LLM fallback (Session 8 upgrade).
 
-    Calls llama3.2:3b with:
-    - MAYA_SYSTEM_PROMPT: personality + language rules
-    - Full message_history: gives Ollama multi-turn context
-    The graph structure and return dict are unchanged from Session 2.
-
-    Falls back to a friendly error message if Ollama is not reachable.
+    Session 8: now uses call_llm_tiered — tries Sarvam/Claude/OpenAI when online,
+    falls back to Ollama when offline. is_online comes from check_connectivity node.
+    The step log shows which tier actually answered: [help_response/claude], etc.
     """
     intent = state["intent"]
     language = state["language"]
     current_steps = state["steps"]
     message_history = state["message_history"]
+    is_online = state.get("is_online", False)
 
-    try:
-        import ollama
+    # Build messages: language-aware system prompt + full conversation history.
+    # chat_loop.py always appends the user message before invoking, so
+    # message_history ends with {"role": "user", ...}. But if called directly
+    # (e.g. in tests) with empty history, we add user_input explicitly.
+    history = message_history
+    if not history or history[-1].get("role") != "user":
+        history = history + [{"role": "user", "content": state["user_input"]}]
 
-        # Build messages: language-aware system prompt + full conversation history.
-        # chat_loop.py always appends the user message before invoking, so
-        # message_history ends with {"role": "user", ...}. But if called directly
-        # (e.g. in tests) with empty history, we add user_input explicitly.
-        history = message_history
-        if not history or history[-1].get("role") != "user":
-            history = history + [{"role": "user", "content": state["user_input"]}]
+    # Enrich system prompt with memory context if available
+    system_content = _build_system_prompt(language)
+    recent_topics = state.get("recent_topics", [])
+    if recent_topics:
+        topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])
+        system_content += f"\n\nContext: Srinika has previously asked about {topic_list}. You can refer back to these if relevant."
 
-        # Enrich system prompt with memory context if available
-        system_content = _build_system_prompt(language)
-        recent_topics = state.get("recent_topics", [])
-        if recent_topics:
-            topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])
-            system_content += f"\n\nContext: Srinika has previously asked about {topic_list}. You can refer back to these if relevant."
+    messages = [{"role": "system", "content": system_content}] + history
 
-        messages = [{"role": "system", "content": system_content}] + history
-
-        result = ollama.chat(
-            model="llama3.2:3b",
-            messages=messages,
-        )
-        response = result.message.content.strip()
-
-    except Exception as e:
-        # Graceful fallback - MAYA stays in character even if Ollama is down
-        response = (
-            "Hmm, I'm having a little trouble thinking right now! "
-            "Make sure Ollama is running with: ollama serve. "
-            f"Error: {e}"
-        )
+    response, provider = call_llm_tiered(messages, is_online)
 
     return {
         "response": response,
         "message_history": [{"role": "assistant", "content": response}],
         "steps": current_steps + [
-            f"[help_response/ollama] → intent='{intent}', language='{language}'"
+            f"[help_response/{provider}] → intent='{intent}', language='{language}'"
         ],
     }
 
@@ -509,34 +618,34 @@ def route_by_intent(state: MayaState) -> str:
 
 def build_conversation_graph():
     """
-    Assembles MAYA's conversation graph (Session 5 version).
+    Assembles MAYA's conversation graph (Session 8 version).
 
-    Changes from Session 4:
-    - load_memory node added as the FIRST node (before detect_language)
-    - save_memory node added as the LAST node (all response nodes → save_memory → END)
-    - greet_response now says "Welcome back!" on return sessions
-    - help_response includes recent topic context in system prompt
+    Changes from Session 6:
+    - check_connectivity node added after load_memory (Session 8)
+    - is_online injected into state so LLM nodes can pick the right provider tier
 
     Graph topology:
-        START → load_memory → detect_language → understand_intent
-             → [greet | farewell | help] → save_memory → END
+        START → load_memory → check_connectivity → detect_language → understand_intent
+             → [greet | farewell | math | help] → save_memory → END
     """
     graph = StateGraph(MayaState)
 
     # Register nodes
     graph.add_node("load_memory",          load_memory)          # Session 5
+    graph.add_node("check_connectivity",   check_connectivity)   # Session 8
     graph.add_node("detect_language",      detect_language)
     graph.add_node("understand_intent",    understand_intent)
     graph.add_node("greet_response",       greet_response)
     graph.add_node("farewell_response",    farewell_response)
-    graph.add_node("math_tutor_response",  math_tutor_response)  # NEW Session 6
+    graph.add_node("math_tutor_response",  math_tutor_response)  # Session 6
     graph.add_node("help_response",        help_response)
     graph.add_node("save_memory",          save_memory)          # Session 5
 
     # Fixed edges
-    graph.add_edge(START,           "load_memory")        # was: START → detect_language
-    graph.add_edge("load_memory",   "detect_language")
-    graph.add_edge("detect_language", "understand_intent")
+    graph.add_edge(START,                  "load_memory")
+    graph.add_edge("load_memory",          "check_connectivity")   # Session 8
+    graph.add_edge("check_connectivity",   "detect_language")      # Session 8
+    graph.add_edge("detect_language",      "understand_intent")
 
     # Conditional edge - 4-way split on intent (Session 6: math added)
     graph.add_conditional_edges(

@@ -201,11 +201,12 @@ class TestEndToEnd:
             assert len(result["response"]) > 0, f"Empty response for: '{text}'"
 
     def test_steps_show_correct_node_order(self):
-        # Session 5: load_memory is now the first node, shifting all indices by 1
+        # Session 8: check_connectivity now runs between load_memory and detect_language
         result = invoke("Hello!")
         assert result["steps"][0].startswith("[load_memory]")
-        assert result["steps"][1].startswith("[detect_language]")
-        assert result["steps"][2].startswith("[understand_intent]")
+        assert result["steps"][1].startswith("[check_connectivity]")
+        assert result["steps"][2].startswith("[detect_language]")
+        assert result["steps"][3].startswith("[understand_intent]")
 
     def test_user_input_preserved_unchanged(self):
         original = "Hello MAYA, kya hal hai?"
@@ -246,7 +247,7 @@ class TestMemoryNodes:
         assert result["session_count"] == 1
 
     def test_save_memory_logs_turn(self, tmp_path):
-        """save_memory logs the user's message to the topics table after each turn."""
+        """save_memory logs a turn to the topics table after each non-farewell turn."""
         db = str(tmp_path / "test.db")
 
         maya_graph.invoke({
@@ -261,7 +262,10 @@ class TestMemoryNodes:
 
         store = MemoryStore(db_path=db)
         recent = store.get_recent_topics()
-        assert "What is photosynthesis?" in recent
+        # Session 9: get_recent_topics() now returns the LLM-extracted semantic topic
+        # (e.g. "photosynthesis" or "plant food process"), not the verbatim question.
+        # We just verify that at least one topic was logged successfully.
+        assert len(recent) >= 1
 
     def test_fresh_install_defaults(self, tmp_path):
         """MemoryStore returns safe defaults when the DB is brand new."""
@@ -325,3 +329,46 @@ class TestMathTutorAgent:
         result = invoke("What is photosynthesis?")
         assert any("help_response" in step for step in result["steps"])
         assert not any("math_tutor_response" in step for step in result["steps"])
+
+
+# ─── Session 8: Connectivity Routing ──────────────────────────────────────────
+
+class TestConnectivityRouting:
+    """
+    Tests for Session 8: check_connectivity node and tiered LLM routing.
+
+    These verify that:
+    - is_online field is populated in state after each turn
+    - check_connectivity step is logged in the graph trace
+    - call_llm_tiered uses Ollama when is_online=False (no API waste)
+    """
+
+    def test_is_online_field_is_bool(self):
+        """check_connectivity node must set is_online as a bool in state."""
+        result = invoke("What is gravity?")
+        assert "is_online" in result
+        assert isinstance(result["is_online"], bool)
+
+    def test_check_connectivity_logged_in_steps(self):
+        """check_connectivity must appear in the steps trace."""
+        result = invoke("Hello!")
+        assert any("[check_connectivity]" in s for s in result["steps"])
+
+    def test_llm_router_offline_uses_ollama(self):
+        """call_llm_tiered with is_online=False must use Ollama, never an online API."""
+        from src.maya.agents.llm_router import call_llm_tiered
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant. Keep answers very short."},
+            {"role": "user", "content": "Say hello in one word."},
+        ]
+        text, provider = call_llm_tiered(messages, is_online=False)
+        assert provider == "ollama", f"Expected 'ollama' but got '{provider}'"
+        assert len(text) > 0
+
+    def test_step_log_shows_provider(self):
+        """Response node steps must include the provider label (e.g. /ollama, /claude)."""
+        result = invoke("What is photosynthesis?")
+        response_steps = [s for s in result["steps"] if "help_response" in s]
+        assert len(response_steps) == 1
+        # Format: "[help_response/ollama] → ..." or "[help_response/claude] → ..."
+        assert "/" in response_steps[0]
