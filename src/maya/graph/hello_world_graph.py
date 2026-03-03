@@ -569,9 +569,12 @@ def math_tutor_response(state: MayaState) -> dict:
         force_provider=preferred_model,
     )
 
+    # Don't store error responses in history — they corrupt context for next turn
+    history_update = [] if provider == "error" else [{"role": "assistant", "content": response}]
+
     return {
         "response": response,
-        "message_history": [{"role": "assistant", "content": response}],
+        "message_history": history_update,
         "steps": current_steps + [
             f"[math_tutor_response/{provider}] → language='{language}'"
         ],
@@ -625,9 +628,12 @@ def help_response(state: MayaState) -> dict:
     preferred_model = state.get("preferred_model") or None  # None → auto tiered
     response, provider = call_llm_tiered(messages, is_online, force_provider=preferred_model)
 
+    # Don't store error responses in history — they corrupt context for next turn
+    history_update = [] if provider == "error" else [{"role": "assistant", "content": response}]
+
     return {
         "response": response,
-        "message_history": [{"role": "assistant", "content": response}],
+        "message_history": history_update,
         "steps": current_steps + [
             f"[help_response/{provider}] → intent='{intent}', language='{language}'"
         ],

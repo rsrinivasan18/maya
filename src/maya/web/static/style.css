@@ -1,6 +1,7 @@
 /* ============================================================
-   MAYA Web UI — Session 11
+   MAYA Web UI — Session 12
    Responsive dark theme: desktop | tablet/mobile | RPi 800×480
+   Session 12 adds: 12-state avatar animations, voice I/O controls
    ============================================================ */
 
 /* ── CSS Custom Properties ─────────────────────────────────── */
@@ -190,10 +191,22 @@ body {
   justify-content: center;
   font-size: 42px;
   cursor: default;
-  transition: border-color 0.3s;
-  /* Session 11: idle pulse only — full 12-state animations added Session 12 */
-  animation: idle-pulse 3s ease-in-out infinite;
+  transition: border-color 0.3s, box-shadow 0.3s;
 }
+
+/* ── 12-state avatar animations (Session 12) ─────────────── */
+.avatar[data-state="idle"]        { animation: avatar-idle        3s   ease-in-out infinite; }
+.avatar[data-state="thinking"]    { animation: avatar-thinking    2s   ease-in-out infinite; }
+.avatar[data-state="talking"]     { animation: avatar-talking     0.5s ease-in-out infinite; }
+.avatar[data-state="excited"]     { animation: avatar-excited     0.6s ease-in-out infinite; }
+.avatar[data-state="happy"]       { animation: avatar-happy       2s   ease-in-out infinite; }
+.avatar[data-state="celebrating"] { animation: avatar-celebrating 0.7s ease-in-out infinite; }
+.avatar[data-state="proud"]       { animation: avatar-proud       2.5s ease-in-out infinite; }
+.avatar[data-state="sad"]         { animation: avatar-sad         3s   ease-in-out infinite; }
+.avatar[data-state="waving"]      { animation: avatar-waving      1s   ease-in-out infinite; }
+.avatar[data-state="focused"]     { animation: avatar-focused     1.2s ease-in-out infinite; }
+.avatar[data-state="sleepy"]      { animation: avatar-sleepy      4s   ease-in-out infinite; }
+.avatar[data-state="patient"]     { animation: avatar-patient     5s   ease-in-out infinite; }
 
 .avatar-label {
   font-size: 11px;
@@ -461,12 +474,88 @@ body {
 .send-btn:hover:not(:disabled) { background: var(--accent-dim); transform: scale(1.04); }
 .send-btn:disabled             { opacity: 0.35; cursor: default; }
 
+/* ── Mic button ────────────────────────────────────────────── */
+.mic-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 10px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  align-self: flex-end;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+}
+.mic-btn:hover           { background: var(--bg-3); color: var(--text); }
+.mic-btn.listening       { color: var(--offline); animation: mic-pulse 1s ease-in-out infinite; }
+.mic-btn[hidden]         { display: none; }
+
 /* ── Keyframes ─────────────────────────────────────────────── */
 
-/* Session 11: placeholder animation — full 12-state system in Session 12 */
-@keyframes idle-pulse {
-  0%, 100% { transform: scale(1);    opacity: 0.9; }
-  50%       { transform: scale(1.06); opacity: 1;   }
+/* Avatar states — Session 12 */
+@keyframes avatar-idle {
+  0%, 100% { transform: scale(1);             opacity: 0.9; }
+  50%       { transform: scale(1.06);          opacity: 1;   }
+}
+@keyframes avatar-thinking {
+  0%, 100% { transform: rotate(0deg);   }
+  25%       { transform: rotate(-10deg); }
+  75%       { transform: rotate(10deg);  }
+}
+@keyframes avatar-talking {
+  0%, 100% { transform: translateY(0px);  }
+  50%       { transform: translateY(-5px); }
+}
+@keyframes avatar-excited {
+  0%, 100% { transform: translateY(0px)   scale(1);    }
+  30%       { transform: translateY(-10px) scale(1.12); }
+  60%       { transform: translateY(-4px)  scale(1.06); }
+}
+@keyframes avatar-happy {
+  0%, 100% { transform: translateY(0px)  scale(1);    }
+  50%       { transform: translateY(-6px) scale(1.05); }
+}
+@keyframes avatar-celebrating {
+  0%        { transform: rotate(0deg)   scale(1);    }
+  25%       { transform: rotate(15deg)  scale(1.15); }
+  50%       { transform: rotate(0deg)   scale(1);    }
+  75%       { transform: rotate(-15deg) scale(1.15); }
+  100%      { transform: rotate(0deg)   scale(1);    }
+}
+@keyframes avatar-proud {
+  0%, 100% { transform: scale(1);    box-shadow: 0 0  0px transparent; }
+  50%       { transform: scale(1.1); box-shadow: 0 0 16px var(--accent); }
+}
+@keyframes avatar-sad {
+  0%, 100% { transform: translateY(0px) scale(1);    opacity: 0.85; }
+  50%       { transform: translateY(5px) scale(0.94); opacity: 0.6;  }
+}
+@keyframes avatar-waving {
+  0%, 100% { transform: rotate(0deg);   }
+  20%       { transform: rotate(15deg);  }
+  40%       { transform: rotate(-10deg); }
+  60%       { transform: rotate(15deg);  }
+  80%       { transform: rotate(-5deg);  }
+}
+@keyframes avatar-focused {
+  0%, 100% { transform: scale(1);    }
+  50%       { transform: scale(1.04); }
+}
+@keyframes avatar-sleepy {
+  0%, 100% { transform: scale(1)    translateY(0px); opacity: 0.75; }
+  50%       { transform: scale(0.95) translateY(6px); opacity: 0.45; }
+}
+@keyframes avatar-patient {
+  0%, 100% { transform: scale(1);    opacity: 0.8;  }
+  50%       { transform: scale(1.02); opacity: 0.95; }
+}
+
+@keyframes mic-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%       { opacity: 0.5; transform: scale(1.1); }
 }
 
 @keyframes dot-bounce {
@@ -502,6 +591,7 @@ body {
   :root { --header-h: 60px; }
 
   .send-btn      { height: 48px; font-size: 18px; padding: 0 22px; }
+  .mic-btn       { height: 48px; font-size: 22px; padding: 0 12px; }
   #input         { font-size: 15px; padding: 12px 14px; }
   .char-btn      { font-size: 24px; padding: 6px 7px; }
   .message       { max-width: 92%; }

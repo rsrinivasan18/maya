@@ -1,12 +1,10 @@
 /**
- * MAYA Web UI — Session 11
+ * MAYA Web UI — Session 12
  * WebSocket chat client with model/agent selection, history sidebar,
- * character picker, and avatar state management.
+ * character picker, 12-state CSS avatar animations, and voice I/O.
  *
- * Session 12 will add:
- *   - 12-state CSS avatar animations
- *   - Web Speech API (voice input)
- *   - SpeechSynthesis (voice output)
+ * Voice input:  Web Speech API (SpeechRecognition) — mic button
+ * Voice output: SpeechSynthesis API — speaker toggle in header
  */
 
 'use strict';
@@ -18,6 +16,8 @@ const el = {
   messages:       document.getElementById('messages'),
   input:          document.getElementById('input'),
   sendBtn:        document.getElementById('send-btn'),
+  micBtn:         document.getElementById('mic-btn'),
+  voiceToggle:    document.getElementById('voice-toggle'),
   thinking:       document.getElementById('thinking'),
   thinkingEmoji:  document.getElementById('thinking-emoji'),
   modelSelect:    document.getElementById('model-select'),
@@ -37,6 +37,7 @@ let ws            = null;
 let reconnectMs   = 1000;
 let currentChar   = localStorage.getItem('maya_char') || '🦋';
 let isConnected   = false;
+let lastDoneState = 'idle';   // Avatar state to restore after talking ends
 
 // ── Character picker ──────────────────────────────────────────────────────────
 function setCharacter(char) {
@@ -59,8 +60,7 @@ document.querySelectorAll('.char-btn').forEach(btn => {
 // ── Avatar state machine ──────────────────────────────────────────────────────
 /**
  * Sets the avatar's data-state attribute.
- * Session 11: only idle-pulse CSS animation is active — state is stored but not
- * yet animated differently. Session 12 adds all 12 @keyframes.
+ * CSS [data-state] selectors automatically switch the @keyframes animation.
  */
 function setAvatarState(state) {
   el.avatar.dataset.state = state;
@@ -84,6 +84,103 @@ const INTENT_DONE_STATE = {
   question: 'happy',
   general:  'idle',
 };
+
+// ── Voice output (SpeechSynthesis) ────────────────────────────────────────────
+let voiceEnabled = localStorage.getItem('maya_voice') === 'true';
+
+function updateVoiceBtn() {
+  el.voiceToggle.textContent = voiceEnabled ? '🔊' : '🔇';
+  el.voiceToggle.title = voiceEnabled
+    ? 'Voice on — click to mute'
+    : 'Voice off — click to enable';
+}
+
+function speakText(text, lang) {
+  if (!voiceEnabled || !window.speechSynthesis) return;
+
+  // Cancel any speech already in progress
+  speechSynthesis.cancel();
+
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.rate  = 1.0;
+  utt.pitch = 1.1;
+
+  // Use detected language hint when available
+  utt.lang = (lang && lang !== 'english') ? 'hi-IN' : 'en-US';
+
+  utt.onstart = () => setAvatarState('talking');
+  utt.onend   = () => setAvatarState(lastDoneState);
+  utt.onerror = () => setAvatarState(lastDoneState);
+
+  speechSynthesis.speak(utt);
+}
+
+el.voiceToggle.addEventListener('click', () => {
+  voiceEnabled = !voiceEnabled;
+  localStorage.setItem('maya_voice', voiceEnabled);
+  updateVoiceBtn();
+  // Stop any ongoing speech when muting
+  if (!voiceEnabled && window.speechSynthesis) {
+    speechSynthesis.cancel();
+    setAvatarState(lastDoneState);
+  }
+});
+
+// Init voice button label
+updateVoiceBtn();
+
+// ── Voice input (SpeechRecognition) ──────────────────────────────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition  = null;
+let isListening  = false;
+
+if (SpeechRecognition) {
+  // Show mic button only in supported browsers (Chrome, Edge)
+  el.micBtn.hidden = false;
+
+  recognition = new SpeechRecognition();
+  recognition.continuous      = false;
+  recognition.interimResults  = true;
+  recognition.lang            = 'en-US';
+
+  recognition.onresult = (event) => {
+    const transcript = Array.from(event.results)
+      .map(r => r[0].transcript)
+      .join('');
+    el.input.value = transcript;
+    // Trigger height resize + enable/disable send
+    el.input.dispatchEvent(new Event('input'));
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    el.micBtn.classList.remove('listening');
+    el.micBtn.title = 'Voice input';
+  };
+
+  recognition.onerror = (event) => {
+    isListening = false;
+    el.micBtn.classList.remove('listening');
+    el.micBtn.title = 'Voice input';
+    if (event.error !== 'no-speech') {
+      console.warn('MAYA voice input error:', event.error);
+    }
+  };
+}
+
+function toggleListening() {
+  if (!recognition) return;
+  if (isListening) {
+    recognition.stop();
+  } else {
+    recognition.start();
+    isListening = true;
+    el.micBtn.classList.add('listening');
+    el.micBtn.title = 'Stop listening';
+  }
+}
+
+el.micBtn.addEventListener('click', toggleListening);
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connect() {
@@ -125,17 +222,15 @@ function onMessage(data) {
       setStatus(`session ${data.session_count} — ready`, 'online');
       setAvatarState('idle');
       addSystemMessage(`Session ${data.session_count}  ·  Hi, ${data.user_name}! 🦋`);
-      // Load sidebar data
       refreshSidebar();
       break;
 
     case 'thinking':
       showThinking();
-      // Avatar will be updated once we know the intent (in 'response')
       setAvatarState('thinking');
       break;
 
-    case 'response':
+    case 'response': {
       hideThinking();
       addMessage('maya', data.text, {
         intent:   data.intent,
@@ -143,16 +238,18 @@ function onMessage(data) {
         steps:    data.steps || [],
         isOnline: data.is_online,
       });
-      // Update status dot to reflect actual online/offline after first LLM call
       setStatus(
         data.is_online ? 'online' : 'offline (Ollama)',
         data.is_online ? 'online' : 'offline'
       );
-      setAvatarState(INTENT_DONE_STATE[data.intent] || 'idle');
+      lastDoneState = INTENT_DONE_STATE[data.intent] || 'idle';
+      setAvatarState(lastDoneState);
       el.sendBtn.disabled = !el.input.value.trim();
-      // Refresh sidebar with any new topics/mastery
+      // Speak the response — avatar switches to 'talking' during playback
+      speakText(data.text, data.language);
       setTimeout(refreshSidebar, 1200);
       break;
+    }
 
     case 'error':
       hideThinking();
@@ -167,6 +264,9 @@ function onMessage(data) {
 function sendMessage() {
   const text = el.input.value.trim();
   if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Stop any active voice input before sending
+  if (isListening && recognition) recognition.stop();
 
   addMessage('user', text);
   el.sendBtn.disabled = true;   // Re-enabled when response arrives
@@ -254,7 +354,6 @@ async function refreshSidebar() {
     const res  = await fetch('/api/history');
     const data = await res.json();
 
-    // Recent topics
     if (data.recent_topics && data.recent_topics.length) {
       el.recentTopics.innerHTML = data.recent_topics
         .map(t => `<li title="${escapeAttr(t)}">${escapeHtml(t)}</li>`)
@@ -263,7 +362,6 @@ async function refreshSidebar() {
       el.recentTopics.innerHTML = '<li class="empty">No topics yet</li>';
     }
 
-    // Mastery
     if (data.mastery && data.mastery.length) {
       el.masteryList.innerHTML = data.mastery.map(m => `
         <li>
@@ -286,7 +384,6 @@ async function loadModels() {
     el.modelSelect.innerHTML = data.models.map(m =>
       `<option value="${m}">${m.charAt(0).toUpperCase() + m.slice(1)}</option>`
     ).join('');
-    // Restore saved preference
     const saved = localStorage.getItem('maya_model') || 'auto';
     if (data.models.includes(saved)) el.modelSelect.value = saved;
   } catch (_) {
@@ -319,10 +416,8 @@ el.sidebarOverlay.addEventListener('click', toggleSidebar);
 
 // ── Input handling ────────────────────────────────────────────────────────────
 el.input.addEventListener('input', () => {
-  // Auto-grow up to max-height (set in CSS)
   el.input.style.height = 'auto';
   el.input.style.height = Math.min(el.input.scrollHeight, 120) + 'px';
-  // Enable send only when there's text and we're connected
   el.sendBtn.disabled = !el.input.value.trim() || !isConnected;
 });
 
@@ -336,7 +431,6 @@ el.input.addEventListener('keydown', (e) => {
 el.sendBtn.addEventListener('click', sendMessage);
 
 // ── Idle sleepy timer (30 s) ──────────────────────────────────────────────────
-// Placeholder: Session 12 will hook this into the CSS animation system
 let idleTimer = null;
 
 function resetIdleTimer() {
@@ -370,6 +464,6 @@ function scrollToBottom() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-loadModels();   // Populate model selector from /api/models
-connect();      // Open WebSocket connection
+loadModels();     // Populate model selector from /api/models
+connect();        // Open WebSocket connection
 resetIdleTimer(); // Start idle timer

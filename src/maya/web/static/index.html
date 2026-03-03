@@ -35,6 +35,9 @@
           <option value="general">General</option>
         </select>
       </div>
+      <button id="voice-toggle" class="icon-btn" title="Voice output off — click to enable" aria-label="Toggle voice output">
+        🔇
+      </button>
     </div>
   </header>
 
@@ -112,6 +115,9 @@
           autocomplete="off"
           spellcheck="true"
         ></textarea>
+        <button id="mic-btn" class="mic-btn" title="Voice input" aria-label="Start voice input" hidden>
+          🎤
+        </button>
         <button id="send-btn" class="send-btn" disabled title="Send message (Enter)" aria-label="Send">
           ▶
         </button>

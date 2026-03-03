@@ -130,13 +130,24 @@ def call_llm_tiered(
     """
     # Build tier list
     if force_provider and force_provider != "auto":
-        # Force a specific provider; Ollama is always the safety-net fallback
-        all_tiers = _TIERS_ONLINE + [_TIER_OLLAMA]
-        forced = [t for t in all_tiers if t[0] == force_provider]
-        tiers = forced + [_TIER_OLLAMA]
+        # Force a specific provider.
+        # Still respect is_online: if offline, skip online providers immediately
+        # (avoids 15-second timeout hangs when network is unavailable).
+        # Ollama is always the safety-net fallback and is never duplicated.
+        if force_provider == "ollama" or not is_online:
+            tiers = [_TIER_OLLAMA]
+        else:
+            all_tiers = _TIERS_ONLINE + [_TIER_OLLAMA]
+            forced = [t for t in all_tiers if t[0] == force_provider]
+            # Add Ollama only if it's not already the forced tier
+            tiers = forced + ([] if force_provider == "ollama" else [_TIER_OLLAMA])
     else:
         # Auto mode: online providers first (if online), then Ollama always last
         tiers = (_TIERS_ONLINE if is_online else []) + [_TIER_OLLAMA]
+
+    # Ollama runs on CPU — can be slow for longer prompts; give it more time.
+    # Online APIs are fast (hosted GPUs); 15 s is generous for them.
+    _TIMEOUT = {"ollama": 90, "sarvam": 15, "claude": 15, "openai": 15}
 
     for label, model, kwargs in tiers:
         if not _key_available(label):
@@ -146,7 +157,7 @@ def call_llm_tiered(
                 model=model,
                 messages=messages,
                 max_tokens=300,
-                timeout=15,
+                timeout=_TIMEOUT.get(label, 15),
                 **kwargs,
             )
             text = response.choices[0].message.content or ""
