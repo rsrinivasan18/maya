@@ -50,26 +50,6 @@
     <!-- ── Sidebar ──────────────────────────────────────────────────── -->
     <aside id="sidebar" class="sidebar">
 
-      <!-- Avatar -->
-      <div class="avatar-section">
-        <div id="avatar" class="avatar" data-state="idle" aria-label="MAYA avatar">
-          <span id="avatar-emoji">🦋</span>
-        </div>
-        <div id="avatar-label" class="avatar-label">idle</div>
-
-        <!-- Character picker -->
-        <div class="char-picker" role="group" aria-label="Choose MAYA character">
-          <span class="char-btn active" data-char="🦋" title="Butterfly">🦋</span>
-          <span class="char-btn" data-char="🤖" title="Robot">🤖</span>
-          <span class="char-btn" data-char="🦊" title="Fox">🦊</span>
-          <span class="char-btn" data-char="🐱" title="Cat">🐱</span>
-          <span class="char-btn" data-char="🌟" title="Star">🌟</span>
-          <span class="char-btn" data-char="🧠" title="Brain">🧠</span>
-          <span class="char-btn" data-char="🦄" title="Unicorn">🦄</span>
-          <span class="char-btn" data-char="🐙" title="Octopus">🐙</span>
-        </div>
-      </div>
-
       <!-- Recent Topics -->
       <div class="sidebar-section">
         <h3>Recent Topics</h3>
@@ -90,6 +70,15 @@
 
     <!-- ── Chat main ─────────────────────────────────────────────────── -->
     <main id="chat-main">
+
+      <!-- MAYA hero eyes + caption -->
+      <div id="maya-hero">
+        <div id="maya-eyes-container">
+          <div id="maya-p5-canvas"></div>
+          <div id="emotion-label" class="emotion-label">idle</div>
+        </div>
+        <div id="maya-caption" aria-live="polite"></div>
+      </div>
 
       <!-- Message thread -->
       <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Conversation">
@@ -115,7 +104,7 @@
           autocomplete="off"
           spellcheck="true"
         ></textarea>
-        <button id="mic-btn" class="mic-btn" title="Voice input" aria-label="Start voice input" hidden>
+        <button id="mic-btn" class="mic-btn" title="Voice input" aria-label="Start voice input">
           🎤
         </button>
         <button id="send-btn" class="send-btn" disabled title="Send message (Enter)" aria-label="Send">
@@ -129,5 +118,7 @@
 </div><!-- /#app -->
 
 <script src="/static/app.js"></script>
+<script src="/static/p5.min.js"></script>
+<script src="/static/maya_eyes.js"></script>
 </body>
 </html>

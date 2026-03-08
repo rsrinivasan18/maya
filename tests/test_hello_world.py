@@ -442,3 +442,74 @@ class TestConnectivityRouting:
         assert len(response_steps) == 1
         # Format: "[help_response/ollama] → ..." or "[help_response/claude] → ..."
         assert "/" in response_steps[0]
+
+
+# ─── Session 13: Multi-Agent Routing ─────────────────────────────────────────
+
+def invoke_with_agent(user_input: str, agent: str) -> dict:
+    """Helper: invoke the graph with a specific agent_override."""
+    return maya_graph.invoke({
+        "user_input":     user_input,
+        "language":       "",
+        "intent":         "",
+        "response":       "",
+        "steps":          [],
+        "message_history": [],
+        "agent_override": agent,
+    })
+
+
+class TestMultiAgentRouting:
+    """
+    Session 13: agent_override wires the UI agent selector to per-agent system prompts.
+
+    Routing rules:
+    - greeting/farewell always win regardless of agent
+    - agent="math" forces math_tutor_response (even for non-math questions)
+    - agent="science"/"story"/"general" → help_response with agent-specific prompt
+    - agent="auto" → existing intent-based routing
+    """
+
+    def test_prompt_files_load_without_error(self):
+        """All four .md prompt files must exist and be non-empty."""
+        from src.maya.graph.hello_world_graph import _load_prompt
+        for name in ("base", "math_tutor", "science_agent", "story_agent"):
+            content = _load_prompt(name)
+            assert len(content) > 50, f"{name}.md is too short or missing"
+
+    def test_agent_science_routes_to_help_response(self):
+        """agent='science' question goes to help_response with science prompt."""
+        result = invoke_with_agent("What is photosynthesis?", "science")
+        assert any("help_response" in s for s in result["steps"])
+        assert any("agent='science'" in s for s in result["steps"])
+
+    def test_agent_story_routes_to_help_response(self):
+        """agent='story' goes to help_response with story prompt."""
+        result = invoke_with_agent("Tell me about gravity", "story")
+        assert any("help_response" in s for s in result["steps"])
+        assert any("agent='story'" in s for s in result["steps"])
+
+    def test_agent_general_routes_to_help_response(self):
+        """agent='general' goes to help_response with base prompt."""
+        result = invoke_with_agent("What is the sky?", "general")
+        assert any("help_response" in s for s in result["steps"])
+
+    def test_agent_math_forces_math_tutor(self):
+        """agent='math' forces math_tutor_response even for a non-math question."""
+        result = invoke_with_agent("Tell me about the sky", "math")
+        assert any("math_tutor_response" in s for s in result["steps"])
+
+    def test_agent_auto_math_intent_uses_math_tutor(self):
+        """agent='auto' + math intent still routes to math_tutor_response."""
+        result = invoke_with_agent("Calculate 10 plus 5", "auto")
+        assert any("math_tutor_response" in s for s in result["steps"])
+
+    def test_greeting_always_wins_over_agent(self):
+        """Greeting intent overrides any agent setting."""
+        result = invoke_with_agent("Hello!", "science")
+        assert any("greet_response" in s for s in result["steps"])
+
+    def test_farewell_always_wins_over_agent(self):
+        """Farewell intent overrides any agent setting."""
+        result = invoke_with_agent("Bye!", "story")
+        assert any("farewell_response" in s for s in result["steps"])

@@ -38,6 +38,7 @@ UPDATED GRAPH FLOW:
 """
 
 import threading
+from pathlib import Path
 
 from langgraph.graph import StateGraph, END, START
 
@@ -48,55 +49,26 @@ from src.maya.models.state import MayaState
 
 
 # =============================================================================
-# MAYA SYSTEM PROMPT  (Session 3 - Ollama LLM integration)
+# PROMPT LOADER  (Session 13 - prompts as .md files)
 # =============================================================================
+# Each agent's personality lives in src/maya/prompts/<name>.md
+# This makes prompts easy to read and tweak without touching Python code.
 
-_MAYA_BASE_PROMPT = """You are MAYA (Multi-Agent hYbrid Assistant) - a warm, encouraging bilingual \
-STEM companion for Srinika, a curious 10-year-old girl in India.
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-YOUR PERSONALITY:
-- Warm, enthusiastic, and encouraging - like a smart older sister
-- You love Science, Technology, Engineering, and Math
-- You use simple analogies from everyday life (food, cricket, nature, school)
-- You celebrate curiosity: every question is a GREAT question
-- You keep explanations simple - no jargon unless you explain it immediately
 
-RESPONSE STYLE:
-- Keep responses SHORT - 2 to 4 sentences maximum
-- Responses are spoken aloud via TTS: write naturally, no bullet points or markdown
-- End with a short follow-up question to keep Srinika curious
-- Never be condescending - treat her as a smart, capable learner"""
+def _load_prompt(name: str) -> str:
+    """Load a system prompt from src/maya/prompts/{name}.md"""
+    return (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8").strip()
 
-# Per-language instructions injected at call time (small models need explicit reminders)
+
+# Per-language instructions injected at call time (small models need explicit reminders).
+# Kept in Python — they are short, parameterised, and not prompt engineering.
 _LANGUAGE_INSTRUCTIONS = {
     "english":  "CRITICAL: You MUST respond in English only. Do not use any Hindi or Urdu words.",
     "hindi":    "CRITICAL: You MUST respond in Hinglish (Roman script Hindi mixed with English). Do not use Devanagari script.",
     "hinglish": "CRITICAL: You MUST respond in Hinglish - natural mix of Hindi (Roman script) and English, like: 'Waah, bahut accha question hai! Gravity is the force...'",
 }
-
-
-def _build_system_prompt(language: str) -> str:
-    """Combine base prompt with a per-turn language instruction."""
-    lang_instruction = _LANGUAGE_INSTRUCTIONS.get(language, _LANGUAGE_INSTRUCTIONS["english"])
-    return f"{_MAYA_BASE_PROMPT}\n\n{lang_instruction}"
-
-
-# =============================================================================
-# MATH TUTOR SYSTEM PROMPT  (Session 6 - dedicated math agent)
-# =============================================================================
-
-_MATH_TUTOR_PROMPT = """You are MAYA's Math Tutor mode - a patient, step-by-step math teacher \
-for Srinika, a curious 10-year-old girl in India.
-
-YOUR TEACHING STYLE:
-- Always solve the problem first, THEN explain each step clearly
-- Use simple everyday analogies: apples, cricket scores, chai cups, rupees
-- Celebrate effort: "Great question! Let me show you how..."
-- If it's a calculation, show the working: "Step 1... Step 2... Answer!"
-- Keep it SHORT - 3 to 5 sentences maximum (spoken aloud via TTS)
-- End with a similar practice problem to reinforce learning
-
-IMPORTANT: Never just give the answer without explaining WHY."""
 
 _MATH_LANGUAGE_INSTRUCTIONS = {
     "english":  "CRITICAL: Respond in English only.",
@@ -104,11 +76,32 @@ _MATH_LANGUAGE_INSTRUCTIONS = {
     "hinglish": "CRITICAL: Respond in Hinglish - mix Hindi (Roman script) and English naturally. Math steps in English.",
 }
 
+# Map agent_override values to prompt file names
+_AGENT_PROMPT_MAP: dict[str, str] = {
+    "science": "science_agent",
+    "story":   "story_agent",
+    "general": "base",
+    "auto":    "base",
+}
+
+
+def _build_agent_prompt(prompt_name: str, language: str) -> str:
+    """Load a prompt file and append the language instruction."""
+    base = _load_prompt(prompt_name)
+    lang_instruction = _LANGUAGE_INSTRUCTIONS.get(language, _LANGUAGE_INSTRUCTIONS["english"])
+    return f"{base}\n\n{lang_instruction}"
+
+
+def _build_system_prompt(language: str) -> str:
+    """Base MAYA prompt (general / auto mode)."""
+    return _build_agent_prompt("base", language)
+
 
 def _build_math_prompt(language: str) -> str:
-    """Math tutor system prompt with language instruction."""
+    """Math tutor prompt with math-specific language instruction."""
+    base = _load_prompt("math_tutor")
     lang_instruction = _MATH_LANGUAGE_INSTRUCTIONS.get(language, _MATH_LANGUAGE_INSTRUCTIONS["english"])
-    return f"{_MATH_TUTOR_PROMPT}\n\n{lang_instruction}"
+    return f"{base}\n\n{lang_instruction}"
 
 
 # =============================================================================
@@ -603,8 +596,12 @@ def help_response(state: MayaState) -> dict:
     if not history or history[-1].get("role") != "user":
         history = history + [{"role": "user", "content": state["user_input"]}]
 
-    # Enrich system prompt with memory context if available
-    system_content = _build_system_prompt(language)
+    # Session 13: pick system prompt based on agent_override
+    # "science" / "story" → dedicated agent prompt from .md file
+    # "general" / "auto" / None → base MAYA prompt
+    agent = state.get("agent_override") or "auto"
+    prompt_name = _AGENT_PROMPT_MAP.get(agent, "base")
+    system_content = _build_agent_prompt(prompt_name, language)
     recent_topics = state.get("recent_topics", [])
     if recent_topics:
         topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])
@@ -635,7 +632,7 @@ def help_response(state: MayaState) -> dict:
         "response": response,
         "message_history": history_update,
         "steps": current_steps + [
-            f"[help_response/{provider}] → intent='{intent}', language='{language}'"
+            f"[help_response/{provider}] → agent='{agent}', intent='{intent}', language='{language}'"
         ],
     }
 
@@ -648,24 +645,33 @@ def help_response(state: MayaState) -> dict:
 
 def route_by_intent(state: MayaState) -> str:
     """
-    Routing function: 4-way split on intent (Session 6: math added).
+    Routing function (Session 13: agent_override added).
 
-    Returns a string matching one of the conditional_edge keys below.
-    - greeting  → greet_response      (warm hello)
-    - farewell  → farewell_response   (goodbye)
-    - math      → math_tutor_response (NEW: step-by-step math teaching)
-    - everything else → help_response (general STEM Q&A via Ollama)
+    Priority order:
+    1. Greeting/farewell always win — social turns work in any agent mode
+    2. agent_override == "math" → force math_tutor_response regardless of intent
+    3. intent == "math" (auto mode) → math_tutor_response
+    4. Everything else → help_response (uses agent-specific prompt inside)
+
+    agent_override values: "auto"|"math"|"science"|"story"|"general"|None
+    science/story/general are handled inside help_response via prompt selection.
     """
     intent = state.get("intent", "general")
+    agent  = state.get("agent_override") or "auto"
 
+    # Social turns always route to their dedicated nodes
     if intent == "greeting":
         return "greet_response"
-    elif intent == "farewell":
+    if intent == "farewell":
         return "farewell_response"
-    elif intent == "math":
+
+    # Agent override: "math" forces math tutor regardless of what the user typed
+    if agent == "math" or intent == "math":
         return "math_tutor_response"
-    else:
-        return "help_response"
+
+    # science / story / general / auto all go to help_response
+    # (help_response picks the right system prompt from agent_override)
+    return "help_response"
 
 
 # =============================================================================

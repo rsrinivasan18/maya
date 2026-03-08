@@ -22,9 +22,9 @@ const el = {
   thinkingEmoji:  document.getElementById('thinking-emoji'),
   modelSelect:    document.getElementById('model-select'),
   agentSelect:    document.getElementById('agent-select'),
-  avatar:         document.getElementById('avatar'),
-  avatarEmoji:    document.getElementById('avatar-emoji'),
-  avatarLabel:    document.getElementById('avatar-label'),
+  mayaEyes:       document.getElementById('maya-eyes'),
+  emotionLabel:   document.getElementById('emotion-label'),
+  caption:        document.getElementById('maya-caption'),
   recentTopics:   document.getElementById('recent-topics'),
   masteryList:    document.getElementById('mastery-list'),
   sidebar:        document.getElementById('sidebar'),
@@ -38,12 +38,12 @@ let reconnectMs   = 1000;
 let currentChar   = localStorage.getItem('maya_char') || '🦋';
 let isConnected   = false;
 let lastDoneState = 'idle';   // Avatar state to restore after talking ends
+let captionTimer  = null;     // Auto-hide caption timer
 
 // ── Character picker ──────────────────────────────────────────────────────────
 function setCharacter(char) {
   currentChar = char;
   localStorage.setItem('maya_char', char);
-  el.avatarEmoji.textContent   = char;
   el.thinkingEmoji.textContent = char;
   document.querySelectorAll('.char-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.char === char);
@@ -63,8 +63,10 @@ document.querySelectorAll('.char-btn').forEach(btn => {
  * CSS [data-state] selectors automatically switch the @keyframes animation.
  */
 function setAvatarState(state) {
-  el.avatar.dataset.state = state;
-  el.avatarLabel.textContent = state;
+  if (el.mayaEyes) el.mayaEyes.setAttribute('data-state', state);
+  if (el.emotionLabel) el.emotionLabel.textContent = state;
+  if (window.mayaEyesSetState) window.mayaEyesSetState(state);
+  if (typeof triggerCelebration === 'function' && state === 'celebrating') triggerCelebration();
 }
 
 /** Map graph intents to avatar states shown DURING LLM processing. */
@@ -88,6 +90,35 @@ const INTENT_DONE_STATE = {
 // ── Voice output (SpeechSynthesis) ────────────────────────────────────────────
 let voiceEnabled = localStorage.getItem('maya_voice') === 'true';
 
+// ── Voice picker — Indian female, soft ────────────────────────────────────────
+let preferredVoice = null;
+
+function pickVoice() {
+  const voices = speechSynthesis.getVoices();
+  if (!voices.length) return;
+
+  // Priority list: best Indian female first, graceful fallback
+  const tests = [
+    v => /heera/i.test(v.name),                                 // Microsoft Heera (en-IN female, Windows)
+    v => /female/i.test(v.name) && v.lang === 'en-IN',          // any labelled female en-IN
+    v => v.lang === 'en-IN',                                     // any en-IN
+    v => /female/i.test(v.name) && v.lang === 'hi-IN',          // Hindi female
+    v => v.lang === 'hi-IN',                                     // any Hindi
+    v => /female/i.test(v.name) && v.lang.startsWith('en'),     // any English female
+  ];
+
+  for (const test of tests) {
+    const match = voices.find(test);
+    if (match) { preferredVoice = match; return; }
+  }
+}
+
+// Voices load asynchronously on first call
+if (window.speechSynthesis) {
+  speechSynthesis.onvoiceschanged = pickVoice;
+  pickVoice(); // also try immediately (Chrome sometimes has them ready)
+}
+
 function updateVoiceBtn() {
   el.voiceToggle.textContent = voiceEnabled ? '🔊' : '🔇';
   el.voiceToggle.title = voiceEnabled
@@ -95,22 +126,39 @@ function updateVoiceBtn() {
     : 'Voice off — click to enable';
 }
 
+// Show text as caption in the hero panel, auto-hide after `ms` milliseconds
+function showCaption(text, ms = 7000) {
+  if (!el.caption) return;
+  clearTimeout(captionTimer);
+  el.caption.textContent = text;
+  el.caption.classList.add('visible');
+  captionTimer = setTimeout(() => el.caption.classList.remove('visible'), ms);
+}
+
+function hideCaption() {
+  clearTimeout(captionTimer);
+  el.caption?.classList.remove('visible');
+}
+
 function speakText(text, lang) {
   if (!voiceEnabled || !window.speechSynthesis) return;
 
-  // Cancel any speech already in progress
   speechSynthesis.cancel();
 
   const utt = new SpeechSynthesisUtterance(text);
-  utt.rate  = 1.0;
-  utt.pitch = 1.1;
+  utt.rate  = 0.92;
+  utt.pitch = 1.15;
 
-  // Use detected language hint when available
-  utt.lang = (lang && lang !== 'english') ? 'hi-IN' : 'en-US';
+  if (preferredVoice) {
+    utt.voice = preferredVoice;
+    utt.lang  = preferredVoice.lang;
+  } else {
+    utt.lang = (lang && lang !== 'english') ? 'hi-IN' : 'en-IN';
+  }
 
   utt.onstart = () => setAvatarState('talking');
-  utt.onend   = () => setAvatarState(lastDoneState);
-  utt.onerror = () => setAvatarState(lastDoneState);
+  utt.onend   = () => { setAvatarState(lastDoneState); hideCaption(); };
+  utt.onerror = () => { setAvatarState(lastDoneState); hideCaption(); };
 
   speechSynthesis.speak(utt);
 }
@@ -134,10 +182,10 @@ const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecogni
 let recognition  = null;
 let isListening  = false;
 
-if (SpeechRecognition) {
-  // Show mic button only in supported browsers (Chrome, Edge)
-  el.micBtn.hidden = false;
+// Always show the mic button — handle unavailability gracefully on click
+el.micBtn.hidden = false;
 
+if (SpeechRecognition) {
   recognition = new SpeechRecognition();
   recognition.continuous      = false;
   recognition.interimResults  = true;
@@ -148,7 +196,6 @@ if (SpeechRecognition) {
       .map(r => r[0].transcript)
       .join('');
     el.input.value = transcript;
-    // Trigger height resize + enable/disable send
     el.input.dispatchEvent(new Event('input'));
   };
 
@@ -156,6 +203,7 @@ if (SpeechRecognition) {
     isListening = false;
     el.micBtn.classList.remove('listening');
     el.micBtn.title = 'Voice input';
+    if (el.input.value.trim() && isConnected) sendMessage();
   };
 
   recognition.onerror = (event) => {
@@ -169,7 +217,14 @@ if (SpeechRecognition) {
 }
 
 function toggleListening() {
-  if (!recognition) return;
+  if (!recognition) {
+    // SpeechRecognition unavailable — needs HTTPS or localhost
+    el.input.placeholder = 'Mic needs HTTPS or localhost — type your message';
+    setTimeout(() => {
+      el.input.placeholder = 'Ask MAYA anything… (Enter to send, Shift+Enter for new line)';
+    }, 3500);
+    return;
+  }
   if (isListening) {
     recognition.stop();
   } else {
@@ -245,6 +300,8 @@ function onMessage(data) {
       lastDoneState = INTENT_DONE_STATE[data.intent] || 'idle';
       setAvatarState(lastDoneState);
       el.sendBtn.disabled = !el.input.value.trim();
+      // Show caption in hero panel (visible with or without voice)
+      showCaption(data.text, voiceEnabled ? 12000 : 6000);
       // Speak the response — avatar switches to 'talking' during playback
       speakText(data.text, data.language);
       setTimeout(refreshSidebar, 1200);
@@ -435,7 +492,7 @@ let idleTimer = null;
 
 function resetIdleTimer() {
   clearTimeout(idleTimer);
-  if (el.avatar.dataset.state === 'sleepy') setAvatarState('idle');
+  if (el.mayaEyes?.getAttribute('data-state') === 'sleepy') setAvatarState('idle');
   idleTimer = setTimeout(() => {
     if (isConnected) setAvatarState('sleepy');
   }, 30_000);
