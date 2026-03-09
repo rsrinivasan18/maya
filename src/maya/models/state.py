@@ -100,5 +100,10 @@ class MayaState(TypedDict):
     preferred_model:  NotRequired[str]   # "auto"|"sarvam"|"claude"|"openai"|"ollama"
     agent_override:   NotRequired[str]   # "auto"|"science"|"math"|"story"|"general"
 
+    # ── Session 14: Editable Persona (built from SQLite persona_config) ─────────
+    # Loaded by load_memory; consumed by help_response + math_tutor_response.
+    # Empty string = no config yet → nodes fall back to .md files.
+    persona_system_prompt: NotRequired[str]
+
     # ── Debug / Learning visibility ────────────────────────────────────────────
     steps: list[str]         # Log entry from each node - shows graph execution flow

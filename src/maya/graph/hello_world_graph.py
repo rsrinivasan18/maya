@@ -104,6 +104,29 @@ def _build_math_prompt(language: str) -> str:
     return f"{base}\n\n{lang_instruction}"
 
 
+def _build_persona_system_prompt(db_path: str | None = None) -> str:
+    """
+    Session 14: Build system prompt from persona_config in SQLite.
+    Returns empty string on any error — nodes fall back to .md files.
+    """
+    try:
+        store = MemoryStore(db_path=db_path)
+        config = store.load_persona_config("srinika")
+    except Exception:
+        return ""
+    if not config:
+        return ""
+    return (
+        "You are MAYA, a bilingual Hindi-English STEM tutor.\n\n"
+        f"TONE: {config.get('tone', '')}\n"
+        f"LANGUAGE: {config.get('language', '')}\n"
+        f"GRADE LEVEL: {config.get('grade_level', '')}\n"
+        f"GREETING STYLE: {config.get('greeting_style', '')}\n"
+        f"RESPONSE STYLE: {config.get('response_style', '')}\n"
+        f"AVOID: {config.get('avoid', '')}\n"
+    )
+
+
 # =============================================================================
 # NODES
 # =============================================================================
@@ -132,6 +155,9 @@ def load_memory(state: MayaState) -> dict:
         last_summary = ""
         mastery = []
 
+    # Session 14: Build system prompt from editable persona config in SQLite
+    persona_prompt = _build_persona_system_prompt(db_path=db_path)
+
     practiced = [m for m in mastery if m["count"] >= 3]
 
     return {
@@ -140,6 +166,7 @@ def load_memory(state: MayaState) -> dict:
         "recent_topics":        recent,
         "last_session_summary": last_summary,             # Session 9
         "mastered_topics":      mastery,                  # Session 10
+        "persona_system_prompt": persona_prompt,          # Session 14
         "steps": current_steps + [
             f"[load_memory] → session_count={profile['session_count']}, "
             f"{len(recent)} recent topic(s), "
@@ -338,56 +365,50 @@ def greet_response(state: MayaState) -> dict:
     last_summary = state.get("last_session_summary", "")   # Session 9: episodic
     mastered = state.get("mastered_topics", [])            # Session 10: procedural
 
-    # ── Session 10: build mastery line (shown only if a topic is "practiced" 3+x) ──
-    practiced = [m for m in mastered if m["count"] >= 3]
-    mastery_line = ""
-    if practiced:
-        top = practiced[0]
-        level_word = {"practiced": "getting really good at", "expert": "an expert in"}.get(
-            top["level"], "explored a lot"
-        )
-        mastery_line = (
-            f"You're {level_word} {top['topic']} ({top['count']}x) — keep it up!"
-        )
+    # Only show last_summary if it's a real learning recap (not a trivial session artifact)
+    _show_summary = (
+        last_summary
+        and len(last_summary) > 20
+        and last_summary.upper() != "SKIP"
+        and not any(w in last_summary.lower() for w in ("saying hello", "saying bye", "said hello", "said bye", "greeting"))
+    )
 
-    if session_count > 1 and last_summary:
-        # ── Best case: episodic summary + optional mastery shoutout ──────────
-        mastery_suffix = f"\n{mastery_line}" if mastery_line else ""
+    if session_count > 1 and _show_summary:
+        # ── Best case: episodic summary — warm, no metadata ───────────────────
         greetings = {
             "english": (
-                f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
-                f"{last_summary}{mastery_suffix}\n"
+                f"Welcome back, Srinika!\n"
+                f"{last_summary}\n"
                 "What shall we explore today?"
             ),
             "hindi": (
-                f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
-                f"{last_summary}{mastery_suffix}\n"
+                f"Wapas aa gayi Srinika! Kitna accha laga!\n"
+                f"{last_summary}\n"
                 "Aaj kya seekhna chahti ho?"
             ),
             "hinglish": (
-                f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
-                f"{last_summary}{mastery_suffix}\n"
+                f"Welcome back Srinika! Bahut accha laga!\n"
+                f"{last_summary}\n"
                 "Aaj kya explore karna hai?"
             ),
         }
-    elif session_count > 1 and recent_topics:
-        # ── Fallback: semantic topics + optional mastery shoutout ─────────────
+    elif session_count > 1 and not _show_summary and recent_topics:
+        # ── Fallback: recent topics, no metadata ──────────────────────────────
         topic_list = ", ".join(t[:40] for t in recent_topics[:2])
-        mastery_suffix = f"\n{mastery_line}" if mastery_line else ""
         greetings = {
             "english": (
-                f"Welcome back, Srinika! Great to see you again (session {session_count})!\n"
-                f"Last time you explored: {topic_list}.{mastery_suffix}\n"
+                f"Welcome back, Srinika!\n"
+                f"Last time you explored: {topic_list}.\n"
                 "What shall we explore today?"
             ),
             "hindi": (
-                f"Wapas aa gayi Srinika! Kitna accha laga (session {session_count})!\n"
-                f"Pichhli baar tumne {topic_list} ke baare mein seekha tha.{mastery_suffix}\n"
+                f"Wapas aa gayi Srinika! Kitna accha laga!\n"
+                f"Pichhli baar tumne {topic_list} ke baare mein seekha tha.\n"
                 "Aaj kya seekhna chahti ho?"
             ),
             "hinglish": (
-                f"Welcome back Srinika! Bahut accha laga (session {session_count})!\n"
-                f"Last time tumne {topic_list} explore kiya tha.{mastery_suffix}\n"
+                f"Welcome back Srinika! Bahut accha laga!\n"
+                f"Last time tumne {topic_list} explore kiya tha.\n"
                 "Aaj kya explore karna hai?"
             ),
         }
@@ -441,7 +462,26 @@ def _summarize_session_background(
     if not message_history:
         return
 
-    # Build a compact conversation digest (capped to keep the prompt small)
+    # ── Gate 1: Skip summary if session had no real learning content ──────────
+    # A "substantive" user turn is longer than 20 chars and not a trivial greeting.
+    _TRIVIAL = {"hi", "hello", "bye", "goodbye", "namaste", "ok", "okay", "yes",
+                "no", "thanks", "thank you", "alvida", "phir milenge", "bye bye"}
+
+    def _is_substantive(msg: dict) -> bool:
+        if msg.get("role") != "user":
+            return False
+        content = msg.get("content", "").strip().lower()
+        if len(content) < 20:
+            return False
+        if content in _TRIVIAL or any(content.startswith(t + " ") for t in _TRIVIAL):
+            return False
+        return True
+
+    substantive_turns = [m for m in message_history if _is_substantive(m)]
+    if not substantive_turns:
+        return  # Only greetings/farewells — no summary worth saving
+
+    # ── Build compact digest of substantive turns only ────────────────────────
     lines = []
     for m in message_history:
         role = "Srinika" if m["role"] == "user" else "MAYA"
@@ -453,9 +493,10 @@ def _summarize_session_background(
         {
             "role": "system",
             "content": (
-                "Summarize this children's learning conversation in ONE warm sentence. "
-                "Start with 'Srinika explored' or 'Srinika asked about'. "
-                "Be specific and encouraging. Maximum 20 words."
+                "You summarize children's learning sessions. "
+                "Write ONE sentence (max 25 words) about what STEM topic was explored. "
+                "Start with 'Srinika explored' or 'Srinika learned about' — only if there was real science, math, or story content. "
+                "If the session only had greetings, small talk, or no educational content, respond with exactly: SKIP"
             ),
         },
         {"role": "user", "content": conversation_digest},
@@ -463,8 +504,11 @@ def _summarize_session_background(
 
     try:
         summary, _ = call_llm_tiered(summary_messages, is_online)
-        store = MemoryStore(db_path=db_path)
-        store.save_session_summary(session_id, summary.strip())
+        summary = summary.strip()
+        # ── Gate 2: Discard if LLM signals nothing worth remembering ──────────
+        if summary and summary.upper() != "SKIP" and len(summary) > 15:
+            store = MemoryStore(db_path=db_path)
+            store.save_session_summary(session_id, summary)
     except Exception:
         pass  # Background — silent failure is OK; next session just won't have a summary
 
@@ -481,22 +525,21 @@ def farewell_response(state: MayaState) -> dict:
     language = state["language"]
     current_steps = state["steps"]
     message_history = state["message_history"]
-    turn_count = len([m for m in message_history if m["role"] == "user"])
     is_online = state.get("is_online", False)
     session_id = state.get("session_id", 0)
     db_path = state.get("memory_db_path") or None
 
     farewells = {
         "english": (
-            f"Goodbye! It was wonderful talking with you today ({turn_count} turns).\n"
+            "Goodbye! It was wonderful talking with you today.\n"
             "Come back whenever you want to learn something new! See you soon!"
         ),
         "hindi": (
-            f"Alvida! Aaj aapse baat karke bahut accha laga ({turn_count} turns).\n"
+            "Alvida! Aaj aapse baat karke bahut accha laga.\n"
             "Jab bhi kuch seekhna ho, wapas aana! Phir milenge!"
         ),
         "hinglish": (
-            f"Goodbye! Aaj bahut maza aaya tumse baat karke ({turn_count} turns).\n"
+            "Goodbye! Aaj bahut maza aaya tumse baat karke.\n"
             "Kuch bhi seekhna ho toh wapas aana! Phir milenge!"
         ),
     }
@@ -539,7 +582,12 @@ def math_tutor_response(state: MayaState) -> dict:
     if not history or history[-1].get("role") != "user":
         history = history + [{"role": "user", "content": state["user_input"]}]
 
-    system_content = _build_math_prompt(language)
+    persona_prompt = state.get("persona_system_prompt", "")
+    if persona_prompt:
+        lang_instruction = _MATH_LANGUAGE_INSTRUCTIONS.get(language, _MATH_LANGUAGE_INSTRUCTIONS["english"])
+        system_content = persona_prompt + "\n\n" + _load_prompt("math_tutor") + "\n\n" + lang_instruction
+    else:
+        system_content = _build_math_prompt(language)
 
     # Session 10: mastery context for math too
     mastered = state.get("mastered_topics", [])
@@ -596,12 +644,20 @@ def help_response(state: MayaState) -> dict:
     if not history or history[-1].get("role") != "user":
         history = history + [{"role": "user", "content": state["user_input"]}]
 
-    # Session 13: pick system prompt based on agent_override
-    # "science" / "story" → dedicated agent prompt from .md file
-    # "general" / "auto" / None → base MAYA prompt
+    # Session 13+14: pick system prompt based on agent_override + persona config
     agent = state.get("agent_override") or "auto"
     prompt_name = _AGENT_PROMPT_MAP.get(agent, "base")
-    system_content = _build_agent_prompt(prompt_name, language)
+    persona_prompt = state.get("persona_system_prompt", "")
+    lang_instruction = _LANGUAGE_INSTRUCTIONS.get(language, _LANGUAGE_INSTRUCTIONS["english"])
+
+    if persona_prompt and agent in ("science", "story"):
+        # Specialist agent: persona tone + specialist .md knowledge
+        system_content = persona_prompt + "\n\n" + _load_prompt(prompt_name) + "\n\n" + lang_instruction
+    elif persona_prompt:
+        # General/auto: persona prompt replaces the base .md
+        system_content = persona_prompt + "\n\n" + lang_instruction
+    else:
+        system_content = _build_agent_prompt(prompt_name, language)
     recent_topics = state.get("recent_topics", [])
     if recent_topics:
         topic_list = ", ".join(f'"{t[:40]}"' for t in recent_topics[:2])

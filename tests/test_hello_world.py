@@ -170,16 +170,17 @@ class TestMessageHistory:
         assert len(result["message_history"]) == 1
         assert result["message_history"][0]["role"] == "assistant"
 
-    def test_farewell_shows_turn_count(self):
-        """Farewell response should mention how many turns were had."""
+    def test_farewell_response_is_warm(self):
+        """Farewell response is warm and contains no turn count metadata."""
         history = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi!"},
             {"role": "user", "content": "bye"},
         ]
         result = invoke("bye", history=history)
-        # farewell_response counts user messages in history
-        assert "2" in result["response"]   # 2 user turns
+        assert len(result["response"]) > 0
+        # Turn count must NOT appear — sidebar handles metadata, not MAYA
+        assert "turns" not in result["response"].lower()
 
 
 # ─── End-to-End ───────────────────────────────────────────────────────────────
@@ -513,3 +514,38 @@ class TestMultiAgentRouting:
         """Farewell intent overrides any agent setting."""
         result = invoke_with_agent("Bye!", "story")
         assert any("farewell_response" in s for s in result["steps"])
+
+
+# ─── Session 14: Persona Config ────────────────────────────────────────────────
+
+class TestPersonaConfig:
+    """
+    Session 14: persona_config SQLite table stores editable persona fields.
+    All tests use a tmp_path DB to avoid touching the real ~/.maya/memory.db.
+    """
+
+    def test_persona_config_table_created(self, tmp_path):
+        """persona_config table exists after MemoryStore init."""
+        db = str(tmp_path / "test.db")
+        store = MemoryStore(db_path=db)
+        import sqlite3
+        conn = sqlite3.connect(db)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        conn.close()
+        assert "persona_config" in tables
+
+    def test_persona_config_seeded_with_six_rows(self, tmp_path):
+        """persona_config has exactly 6 seed rows for 'srinika' on first init."""
+        db = str(tmp_path / "test.db")
+        store = MemoryStore(db_path=db)
+        config = store.load_persona_config("srinika")
+        assert len(config) == 6
+        assert set(config.keys()) == {"tone", "language", "grade_level", "greeting_style", "response_style", "avoid"}
+
+    def test_save_persona_config_updates_field(self, tmp_path):
+        """save_persona_config upserts a field; load_persona_config reflects the change."""
+        db = str(tmp_path / "test.db")
+        store = MemoryStore(db_path=db)
+        store.save_persona_config("srinika", "tone", "calm and wise")
+        config = store.load_persona_config("srinika")
+        assert config["tone"] == "calm and wise"

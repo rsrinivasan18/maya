@@ -14,7 +14,7 @@
     <button id="sidebar-toggle" class="icon-btn" title="Toggle history" aria-label="Toggle sidebar">
       ☰
     </button>
-    <span class="logo">🦋 MAYA</span>
+    <span class="logo">✦ MAYA</span>
     <span id="status-dot" class="status-dot offline" title="Connection status"></span>
     <span id="status-text" class="status-text">connecting…</span>
 
@@ -50,21 +50,56 @@
     <!-- ── Sidebar ──────────────────────────────────────────────────── -->
     <aside id="sidebar" class="sidebar">
 
-      <!-- Recent Topics -->
-      <div class="sidebar-section">
-        <h3>Recent Topics</h3>
-        <ul id="recent-topics" class="topic-list">
-          <li class="empty">No topics yet</li>
-        </ul>
+      <!-- Tab bar -->
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" data-tab="history">📚 History</button>
+        <button class="sidebar-tab" data-tab="persona">✦ Persona</button>
       </div>
 
-      <!-- Mastery -->
-      <div class="sidebar-section">
-        <h3>Mastery</h3>
-        <ul id="mastery-list" class="mastery-list">
-          <li class="empty">Start exploring!</li>
-        </ul>
+      <!-- History panel -->
+      <div id="panel-history" class="sidebar-panel">
+        <div class="sidebar-section">
+          <h3>Recent Topics</h3>
+          <ul id="recent-topics" class="topic-list">
+            <li class="empty">No topics yet</li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <h3>Mastery</h3>
+          <ul id="mastery-list" class="mastery-list">
+            <li class="empty">Start exploring!</li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <button class="clear-history-btn" onclick="clearAllHistory()">Clear all history</button>
+        </div>
       </div>
+
+      <!-- Persona panel -->
+      <div id="panel-persona" class="sidebar-panel" hidden>
+        <div class="sidebar-section">
+          <h3>Persona Settings</h3>
+          <p class="pf-hint">Changes take effect on your next message.</p>
+          <div class="persona-form">
+            <label class="pf-label">Tone</label>
+            <textarea class="pf-field" id="pf-tone" rows="2"></textarea>
+            <label class="pf-label">Language</label>
+            <textarea class="pf-field" id="pf-language" rows="2"></textarea>
+            <label class="pf-label">Grade Level</label>
+            <textarea class="pf-field" id="pf-grade_level" rows="2"></textarea>
+            <label class="pf-label">Greeting Style</label>
+            <textarea class="pf-field" id="pf-greeting_style" rows="3"></textarea>
+            <label class="pf-label">Response Style</label>
+            <textarea class="pf-field" id="pf-response_style" rows="3"></textarea>
+            <label class="pf-label">Avoid</label>
+            <textarea class="pf-field" id="pf-avoid" rows="3"></textarea>
+            <button id="save-persona-btn" class="save-persona-btn">Save Changes</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Save toast -->
+      <div id="persona-toast" class="persona-toast" hidden>✓ Saved</div>
 
     </aside>
 
@@ -79,6 +114,9 @@
         </div>
         <div id="maya-caption" aria-live="polite"></div>
       </div>
+
+      <!-- Resize handle — drag to adjust hero height -->
+      <div id="hero-resize" class="hero-resize" title="Drag to resize"></div>
 
       <!-- Message thread -->
       <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Conversation">
@@ -98,7 +136,7 @@
       <div class="input-area">
         <textarea
           id="input"
-          placeholder="Ask MAYA anything… (Enter to send, Shift+Enter for new line)"
+          placeholder="Ask me anything…"
           rows="1"
           aria-label="Message input"
           autocomplete="off"
@@ -108,7 +146,7 @@
           🎤
         </button>
         <button id="send-btn" class="send-btn" disabled title="Send message (Enter)" aria-label="Send">
-          ▶
+          ➤
         </button>
       </div>
 

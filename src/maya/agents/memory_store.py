@@ -48,8 +48,15 @@ Session 9 — Three memory improvements:
      injected into LLM system prompts so MAYA builds on prior knowledge.
 """
 
+import re
 import sqlite3
 from pathlib import Path
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks that some LLMs leak into output."""
+    return _THINK_RE.sub("", text).strip()
 
 DEFAULT_DB_PATH = Path.home() / ".maya" / "memory.db"
 DEFAULT_USER_NAME = "Srinika"  # Week 6: replace with voice-based name detection
@@ -157,12 +164,39 @@ class MemoryStore:
                 )
             """)
 
+            # Session 14: editable persona configuration
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS persona_config (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    persona_name TEXT NOT NULL DEFAULT 'srinika',
+                    field_key    TEXT NOT NULL,
+                    field_value  TEXT NOT NULL,
+                    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(persona_name, field_key)
+                )
+            """)
+
             # Seed exactly one profile row if the DB is brand new.
             # INSERT OR IGNORE: if id=1 already exists, does nothing.
             conn.execute("""
                 INSERT OR IGNORE INTO profile (id, user_name, session_count, total_turns)
                 VALUES (1, ?, 0, 0)
             """, (DEFAULT_USER_NAME,))
+
+            # Seed default persona config for 'srinika' on first run.
+            _srinika_defaults = [
+                ('srinika', 'tone',           'warm and playful didi, never formal'),
+                ('srinika', 'language',       'Hindi and English mixed — Hinglish OK'),
+                ('srinika', 'grade_level',    'Grade 4, age 9'),
+                ('srinika', 'greeting_style', 'Short and warm. Never mention session numbers, mastery counts, or past learning history. Just say hello and ask what to explore today.'),
+                ('srinika', 'response_style', 'Use Indian analogies (chai, roti, cricket). Keep responses short. Always end with one fun question.'),
+                ('srinika', 'avoid',          'Never say session number. Never say mastery count. Never summarize past sessions in greeting. Sidebar handles metadata — not you.'),
+            ]
+            for persona_name, field_key, field_value in _srinika_defaults:
+                conn.execute(
+                    "INSERT OR IGNORE INTO persona_config (persona_name, field_key, field_value) VALUES (?, ?, ?)",
+                    (persona_name, field_key, field_value),
+                )
             conn.commit()
 
     # ── Public API ───────────────────────────────────────────────────────────
@@ -208,7 +242,11 @@ class MemoryStore:
             rows = conn.execute(
                 "SELECT message, topic FROM topics ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
-            return [row["topic"] if row["topic"] else row["message"] for row in rows]
+            return [
+                _strip_think_tags(row["topic"] if row["topic"] else row["message"])
+                for row in rows
+                if _strip_think_tags(row["topic"] if row["topic"] else row["message"])
+            ]
 
     def log_turn(
         self,
@@ -320,6 +358,56 @@ class MemoryStore:
                 "SELECT summary FROM sessions ORDER BY id DESC LIMIT 1"
             ).fetchone()
             return row["summary"] if row else ""
+
+    def load_persona_config(self, persona_name: str = "srinika") -> dict[str, str]:
+        """Return all persona config fields as {field_key: field_value}."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT field_key, field_value FROM persona_config WHERE persona_name = ?",
+                (persona_name,),
+            ).fetchall()
+            return {row["field_key"]: row["field_value"] for row in rows}
+
+    def save_persona_config(self, persona_name: str, field_key: str, field_value: str) -> None:
+        """Upsert a single persona config field."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO persona_config (persona_name, field_key, field_value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(persona_name, field_key) DO UPDATE SET
+                    field_value = excluded.field_value,
+                    updated_at  = datetime('now')
+                """,
+                (persona_name, field_key, field_value),
+            )
+            conn.commit()
+
+    def delete_topic_entry(self, topic_text: str) -> None:
+        """Delete all topic log entries matching the given display text."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM topics WHERE topic = ? OR (topic = '' AND message = ?)",
+                (topic_text, topic_text),
+            )
+            conn.commit()
+
+    def delete_mastery_entry(self, topic_key: str) -> None:
+        """Delete a mastery record by topic key (case-insensitive)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM mastery WHERE topic_key = ?",
+                (topic_key.lower().strip(),),
+            )
+            conn.commit()
+
+    def clear_all_history(self) -> None:
+        """Wipe topics, sessions, and mastery — keeps profile and persona config."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM topics")
+            conn.execute("DELETE FROM sessions")
+            conn.execute("DELETE FROM mastery")
+            conn.commit()
 
     def reset(self) -> None:
         """

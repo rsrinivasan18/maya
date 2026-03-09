@@ -45,12 +45,38 @@ Why is session_id important?
 
 import asyncio
 import json
+import re
 import warnings
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+def _clean_response(text: str) -> str:
+    """
+    Strip LLM reasoning blocks from responses.
+
+    Two modes:
+    - DeepSeek / Qwen style: <think>reasoning</think>ANSWER  → keep ANSWER, strip block
+    - Sarvam style: <think>FULL RESPONSE</think>             → keep content, remove tags only
+
+    If stripping the think block leaves nothing, the model used <think> as a wrapper
+    (not a separator), so we remove only the tags and preserve the content inside.
+    """
+    # Step 1: remove complete <think>...</think> blocks
+    stripped = _THINK_RE.sub("", text).strip()
+    # Step 2: remove any unclosed <think>... tail
+    stripped = re.sub(r"<think>.*", "", stripped, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    if stripped:
+        return stripped
+
+    # Entire response was inside <think> — just remove the tags, keep the content
+    return re.sub(r"</?think>", "", text, flags=re.IGNORECASE).strip()
+
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from src.maya.agents.memory_store import MemoryStore
 from src.maya.config.settings import settings
@@ -110,10 +136,52 @@ async def get_history():
     }
 
 
+@app.delete("/api/history/topic")
+async def delete_topic(topic: str = Query(...)):
+    MemoryStore().delete_topic_entry(topic)
+    return {"ok": True}
+
+
+@app.delete("/api/history/mastery")
+async def delete_mastery(topic: str = Query(...)):
+    MemoryStore().delete_mastery_entry(topic)
+    return {"ok": True}
+
+
+@app.delete("/api/history/all")
+async def clear_all_history():
+    MemoryStore().clear_all_history()
+    return {"ok": True}
+
+
 @app.get("/api/health")
 async def health():
     """Health check endpoint — useful for monitoring and RPi startup scripts."""
-    return {"status": "ok", "version": "11.0"}
+    return {"status": "ok", "version": "14.0"}
+
+
+# ── Persona config endpoints (Session 14) ─────────────────────────────────────
+
+class PersonaConfigUpdate(BaseModel):
+    persona_name: str = "srinika"
+    field_key:    str
+    field_value:  str
+
+
+@app.get("/api/persona-config")
+async def get_persona_config(persona: str = Query(default="srinika")):
+    """Return all persona config fields as {field_key: field_value} for a persona."""
+    store = MemoryStore()
+    config = store.load_persona_config(persona)
+    return {"persona": persona, "config": config}
+
+
+@app.post("/api/persona-config")
+async def set_persona_config(update: PersonaConfigUpdate):
+    """Upsert a single persona config field. Changes take effect on next message."""
+    store = MemoryStore()
+    store.save_persona_config(update.persona_name, update.field_key, update.field_value)
+    return {"ok": True, "persona": update.persona_name, "field_key": update.field_key}
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
@@ -194,7 +262,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 await websocket.send_json({
                     "type":      "response",
-                    "text":      result["response"],
+                    "text":      _clean_response(result["response"]),
                     "intent":    result.get("intent", "general"),
                     "language":  result.get("language", "english"),
                     "steps":     result.get("steps", []),

@@ -156,9 +156,33 @@ function speakText(text, lang) {
     utt.lang = (lang && lang !== 'english') ? 'hi-IN' : 'en-IN';
   }
 
-  utt.onstart = () => setAvatarState('talking');
-  utt.onend   = () => { setAvatarState(lastDoneState); hideCaption(); };
-  utt.onerror = () => { setAvatarState(lastDoneState); hideCaption(); };
+  // Safety: if speechSynthesis.onend never fires (common on Windows/Chrome),
+  // restore avatar after a reasonable maximum wait so it never gets stuck.
+  let talkEndFired = false;
+  const safetyMs = Math.min(Math.max(text.length * 80, 10000), 60000);
+  let safetyTimer = null;
+
+  const _onTalkEnd = () => {
+    if (talkEndFired) return;
+    talkEndFired = true;
+    clearTimeout(safetyTimer);
+    isTalking = false;
+    setAvatarState(lastDoneState);
+    hideCaption();
+    el.micBtn.classList.remove('maya-talking');
+    el.micBtn.title = 'Tap to speak';
+  };
+
+  safetyTimer = setTimeout(_onTalkEnd, safetyMs);
+
+  utt.onstart = () => {
+    isTalking = true;
+    setAvatarState('talking');
+    el.micBtn.classList.add('maya-talking');
+    el.micBtn.title = 'Tap to interrupt';
+  };
+  utt.onend   = _onTalkEnd;
+  utt.onerror = _onTalkEnd;
 
   speechSynthesis.speak(utt);
 }
@@ -181,6 +205,7 @@ updateVoiceBtn();
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition  = null;
 let isListening  = false;
+let isTalking    = false;   // true while SpeechSynthesis is speaking
 
 // Always show the mic button — handle unavailability gracefully on click
 el.micBtn.hidden = false;
@@ -221,17 +246,40 @@ function toggleListening() {
     // SpeechRecognition unavailable — needs HTTPS or localhost
     el.input.placeholder = 'Mic needs HTTPS or localhost — type your message';
     setTimeout(() => {
-      el.input.placeholder = 'Ask MAYA anything… (Enter to send, Shift+Enter for new line)';
+      el.input.placeholder = 'Ask me anything…';
     }, 3500);
     return;
   }
+
+  // Tap mic = always interrupt MAYA if she's speaking first
+  if (isTalking || window.speechSynthesis?.speaking) {
+    speechSynthesis.cancel();
+    isTalking = false;
+    setAvatarState(lastDoneState);
+    hideCaption();
+    el.micBtn.classList.remove('maya-talking');
+    el.micBtn.title = 'Voice input';
+    // If we weren't already listening, now start listening
+    if (!isListening) {
+      try {
+        recognition.start();
+        isListening = true;
+        el.micBtn.classList.add('listening');
+        el.micBtn.title = 'Tap to stop';
+      } catch (_) { /* recognition already running */ }
+    }
+    return;
+  }
+
   if (isListening) {
     recognition.stop();
   } else {
-    recognition.start();
-    isListening = true;
-    el.micBtn.classList.add('listening');
-    el.micBtn.title = 'Stop listening';
+    try {
+      recognition.start();
+      isListening = true;
+      el.micBtn.classList.add('listening');
+      el.micBtn.title = 'Tap to stop';
+    } catch (_) { /* already running */ }
   }
 }
 
@@ -287,7 +335,9 @@ function onMessage(data) {
 
     case 'response': {
       hideThinking();
-      addMessage('maya', data.text, {
+      // Double-strip on client side — catches any think tags the server missed
+      const cleanText = stripThink(data.text);
+      addMessage('maya', cleanText, {
         intent:   data.intent,
         language: data.language,
         steps:    data.steps || [],
@@ -301,9 +351,9 @@ function onMessage(data) {
       setAvatarState(lastDoneState);
       el.sendBtn.disabled = !el.input.value.trim();
       // Show caption in hero panel (visible with or without voice)
-      showCaption(data.text, voiceEnabled ? 12000 : 6000);
+      showCaption(cleanText, voiceEnabled ? 12000 : 6000);
       // Speak the response — avatar switches to 'talking' during playback
-      speakText(data.text, data.language);
+      speakText(cleanText, data.language);
       setTimeout(refreshSidebar, 1200);
       break;
     }
@@ -412,9 +462,11 @@ async function refreshSidebar() {
     const data = await res.json();
 
     if (data.recent_topics && data.recent_topics.length) {
-      el.recentTopics.innerHTML = data.recent_topics
-        .map(t => `<li title="${escapeAttr(t)}">${escapeHtml(t)}</li>`)
-        .join('');
+      el.recentTopics.innerHTML = data.recent_topics.map(t => `
+        <li title="${escapeAttr(t)}">
+          <span class="topic-text">${escapeHtml(t)}</span>
+          <button class="history-del-btn" data-topic="${escapeAttr(t)}" data-type="topic" title="Remove">×</button>
+        </li>`).join('');
     } else {
       el.recentTopics.innerHTML = '<li class="empty">No topics yet</li>';
     }
@@ -424,13 +476,34 @@ async function refreshSidebar() {
         <li>
           <span class="mastery-topic" title="${escapeAttr(m.topic)}">${escapeHtml(m.topic)}</span>
           <span class="mastery-badge level-${m.level}">${m.level} ${m.count}×</span>
+          <button class="history-del-btn" data-topic="${escapeAttr(m.topic)}" data-type="mastery" title="Remove">×</button>
         </li>`).join('');
     } else {
       el.masteryList.innerHTML = '<li class="empty">Start exploring!</li>';
     }
+
+    // Wire up delete buttons
+    document.querySelectorAll('.history-del-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const type  = btn.dataset.type;
+        const topic = btn.dataset.topic;
+        const url   = type === 'mastery'
+          ? `/api/history/mastery?topic=${encodeURIComponent(topic)}`
+          : `/api/history/topic?topic=${encodeURIComponent(topic)}`;
+        await fetch(url, { method: 'DELETE' });
+        refreshSidebar();
+      });
+    });
   } catch (_) {
     // Network error — sidebar stays as-is
   }
+}
+
+async function clearAllHistory() {
+  if (!confirm('Clear all history and mastery? This cannot be undone.')) return;
+  await fetch('/api/history/all', { method: 'DELETE' });
+  refreshSidebar();
 }
 
 // ── Models API ────────────────────────────────────────────────────────────────
@@ -471,6 +544,65 @@ function toggleSidebar() {
 el.sidebarToggle.addEventListener('click', toggleSidebar);
 el.sidebarOverlay.addEventListener('click', toggleSidebar);
 
+// ── Sidebar tabs ──────────────────────────────────────────────────────────────
+const PERSONA_FIELDS = ['tone', 'language', 'grade_level', 'greeting_style', 'response_style', 'avoid'];
+
+document.querySelectorAll('.sidebar-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    document.getElementById('panel-history').hidden = (tab !== 'history');
+    document.getElementById('panel-persona').hidden = (tab !== 'persona');
+    if (tab === 'persona') loadPersonaConfig();
+  });
+});
+
+// ── Persona config load/save ──────────────────────────────────────────────────
+async function loadPersonaConfig() {
+  try {
+    const res  = await fetch('/api/persona-config?persona=srinika');
+    const data = await res.json();
+    const cfg  = data.config || {};
+    PERSONA_FIELDS.forEach(key => {
+      const field = document.getElementById(`pf-${key}`);
+      if (field) field.value = cfg[key] || '';
+    });
+  } catch (_) {
+    // Server not reachable — fields stay blank
+  }
+}
+
+async function savePersonaConfig() {
+  const btn = document.getElementById('save-persona-btn');
+  btn.disabled = true;
+  try {
+    await Promise.all(PERSONA_FIELDS.map(key => {
+      const field = document.getElementById(`pf-${key}`);
+      if (!field) return Promise.resolve();
+      return fetch('/api/persona-config', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ persona_name: 'srinika', field_key: key, field_value: field.value }),
+      });
+    }));
+    showPersonaToast();
+  } catch (_) {
+    // Network error — silently ignore, user can retry
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showPersonaToast() {
+  const toast = document.getElementById('persona-toast');
+  if (!toast) return;
+  toast.hidden = false;
+  setTimeout(() => { toast.hidden = true; }, 2200);
+}
+
+document.getElementById('save-persona-btn')?.addEventListener('click', savePersonaConfig);
+
 // ── Input handling ────────────────────────────────────────────────────────────
 el.input.addEventListener('input', () => {
   el.input.style.height = 'auto';
@@ -503,6 +635,23 @@ document.addEventListener('mousedown',  resetIdleTimer);
 document.addEventListener('touchstart', resetIdleTimer);
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+/**
+ * Client-side safety strip for LLM reasoning blocks.
+ * Matches server logic: if stripping <think> leaves nothing, the model wrapped
+ * its full response in <think> (Sarvam style) — remove tags but keep content.
+ */
+function stripThink(text) {
+  const cleaned = String(text)
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')  // remove complete blocks
+    .replace(/<think>[\s\S]*/gi, '')            // remove unclosed tail
+    .trim();
+  // If nothing survived the strip, just remove the tags and keep the inner content
+  if (!cleaned) {
+    return String(text).replace(/<\/?think>/gi, '').trim();
+  }
+  return cleaned;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -519,6 +668,63 @@ function escapeAttr(str) {
 function scrollToBottom() {
   el.messages.scrollTop = el.messages.scrollHeight;
 }
+
+// ── Hero resize handle ────────────────────────────────────────────────────────
+(function () {
+  const HERO_MIN_VH = 15;
+  const HERO_MAX_VH = 78;
+  const handle = document.getElementById('hero-resize');
+
+  // Restore saved height
+  const saved = localStorage.getItem('maya_hero_h');
+  if (saved) document.documentElement.style.setProperty('--hero-h', saved + 'vh');
+
+  if (!handle) return;
+
+  let dragging = false;
+
+  function setHeroH(clientY) {
+    const headerH = document.getElementById('header').offsetHeight;
+    const vh = ((clientY - headerH) / window.innerHeight) * 100;
+    const clamped = Math.min(HERO_MAX_VH, Math.max(HERO_MIN_VH, vh));
+    document.documentElement.style.setProperty('--hero-h', clamped + 'vh');
+    return clamped;
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    e.preventDefault();
+    setHeroH(e.touches ? e.touches[0].clientY : e.clientY);
+  }
+
+  function onEnd(e) {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+    const final = setHeroH(clientY);
+    localStorage.setItem('maya_hero_h', final.toFixed(1));
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onEnd);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onEnd);
+  }
+
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    handle.classList.add('dragging');
+    e.preventDefault();
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+  });
+
+  handle.addEventListener('touchstart', (e) => {
+    dragging = true;
+    handle.classList.add('dragging');
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+  }, { passive: true });
+}());
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadModels();     // Populate model selector from /api/models
