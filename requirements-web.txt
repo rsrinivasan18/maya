@@ -1,0 +1,41 @@
+# MAYA - Web / Cloud dependencies (Docker / AWS App Runner)
+# ──────────────────────────────────────────────────────────
+# Stripped of all local voice / hardware deps:
+#   piper-tts      — offline TTS (RPi only, needs ONNX runtime + model files)
+#   faster-whisper — offline STT (RPi only, needs CUDA/CPU models)
+#   sounddevice    — microphone access (no hardware in container)
+#   numpy          — pulled in by whisper/sounddevice, not needed web-only
+#   ollama         — local LLM (no Ollama server in container)
+#   pytest         — test runner (not needed at runtime)
+#
+# Web UI uses browser SpeechRecognition (mic) + SpeechSynthesis (TTS) instead.
+# LLM tier: Sarvam → Claude → OpenAI  (no Ollama fallback in cloud)
+
+# ─── Core: LangGraph & LangChain ───────────────────────────────────────────────
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-community>=0.3.0
+langsmith>=0.1.0
+
+# ─── Configuration ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ─── Terminal UI ───────────────────────────────────────────────────────────────
+rich>=13.0.0
+
+# ─── Online LLM Tiers (Sarvam → Claude → OpenAI) ──────────────────────────────
+sarvamai>=0.1.0
+anthropic>=0.40.0
+openai>=1.0.0
+
+# ─── LiteLLM — unified LLM interface ───────────────────────────────────────────
+litellm>=1.0.0
+
+# ─── Web Backend (FastAPI + WebSocket) ─────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn>=0.30.0
+websockets>=12.0
+
+# ─── Database (SQLAlchemy + PostgreSQL driver) ──────────────────────────────────
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0

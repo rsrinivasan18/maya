@@ -76,6 +76,18 @@ _MATH_LANGUAGE_INSTRUCTIONS = {
     "hinglish": "CRITICAL: Respond in Hinglish - mix Hindi (Roman script) and English naturally. Math steps in English.",
 }
 
+# CBSE Grade 4 context — injected into every tutor/question system prompt.
+# Srinika is 9 years old and types Indian historical names phonetically.
+# This note tells the LLM to infer the correct name from CBSE context
+# instead of asking for clarification.
+_CBSE_CONTEXT = (
+    "You are tutoring a 9 year old Indian girl on CBSE Grade 4 curriculum. "
+    "She misspells Indian historical names phonetically. "
+    "When you see garbled names like 'krishna verma raja', 'kishore raja' → infer Krishnadevaraya. "
+    "'ashok raja' → Ashoka. "
+    "Always infer from CBSE Grade 4 context and answer confidently without asking for spelling clarification."
+)
+
 # Map agent_override values to prompt file names
 _AGENT_PROMPT_MAP: dict[str, str] = {
     "science": "science_agent",
@@ -149,11 +161,13 @@ def load_memory(state: MayaState) -> dict:
         recent = store.get_recent_topics(limit=3)
         last_summary = store.get_last_session_summary()   # Session 9: episodic
         mastery = store.get_mastery_summary(limit=5)      # Session 10: procedural
+        todos  = store.get_pending_todos()               # Session 17: reminders
     except Exception:
         profile = {"user_name": "Srinika", "session_count": 0, "total_turns": 0}
         recent = []
         last_summary = ""
         mastery = []
+        todos  = []
 
     # Session 14: Build system prompt from editable persona config in SQLite
     persona_prompt = _build_persona_system_prompt(db_path=db_path)
@@ -167,6 +181,7 @@ def load_memory(state: MayaState) -> dict:
         "last_session_summary": last_summary,             # Session 9
         "mastered_topics":      mastery,                  # Session 10
         "persona_system_prompt": persona_prompt,          # Session 14
+        "pending_todos":        todos,                    # Session 17
         "steps": current_steps + [
             f"[load_memory] → session_count={profile['session_count']}, "
             f"{len(recent)} recent topic(s), "
@@ -307,6 +322,10 @@ def understand_intent(state: MayaState) -> dict:
     words_in_input = {w.strip(".,!?;:'\"") for w in user_input.split()}
 
     # Single-word triggers — checked via set membership (no substring false positives)
+    # Also check hyphen-split words so "bye-bye" → {"bye", "bye"} → matches "bye"
+    words_also_hyphen = words_in_input | {
+        part for w in words_in_input for part in w.split("-") if part
+    }
     farewell_single  = {"bye", "goodbye", "goodnight", "cya", "alvida", "tata", "exit", "quit", "stop", "later"}
     greeting_single  = {"hello", "hi", "hey", "namaste", "namaskar", "sup"}
     math_single      = {"calculate", "solve", "math", "add", "subtract", "multiply", "divide",
@@ -315,12 +334,27 @@ def understand_intent(state: MayaState) -> dict:
                         "describe", "kya", "kyun", "kaise", "kab", "kahaan", "kaun", "batao", "samjhao"}
 
     # Multi-word phrases — substring match is fine (they're specific enough)
-    farewell_phrases  = {"good bye", "see you", "phir milenge", "good night", "band karo"}
+    farewell_phrases  = {
+        "good bye", "see you", "phir milenge", "good night", "band karo",
+        "talk tomorrow", "talk to you later", "talk later", "chat later",
+        "see you tomorrow", "see you later", "i'm going", "i am going",
+        "going to sleep", "going to bed",
+    }
     greeting_phrases  = {"good morning", "good evening"}
     question_phrases  = {"tell me"}
+    # Single-word reminder triggers
+    reminder_single = {"reminder", "reminders", "todo", "todos"}
+    # Multi-word reminder phrases — tight enough to avoid "remind me how to..." false positives
+    reminder_phrases = {
+        "remind me to", "remind me about", "don't forget", "set a reminder",
+        "add a reminder", "याद रखो", "याद दिलाओ", "mujhe yaad dilao",
+        "add to my list", "add to my todo", "my todo", "my reminder",
+        "show my todo", "show reminder", "what are my todo",
+    }
 
     def _match(single_set, phrase_set=None):
-        if words_in_input & single_set:
+        # Use hyphen-expanded word set so "bye-bye" splits into {"bye"} → matches
+        if words_also_hyphen & single_set:
             return True
         if phrase_set and any(p in user_input for p in phrase_set):
             return True
@@ -337,6 +371,8 @@ def understand_intent(state: MayaState) -> dict:
         intent = "farewell"
     elif _is_greeting():
         intent = "greeting"
+    elif _match(reminder_single) or any(p in user_input for p in reminder_phrases):
+        intent = "reminder"
     elif _match(math_single):
         intent = "math"
     elif _match(question_single, question_phrases):
@@ -601,6 +637,8 @@ def math_tutor_response(state: MayaState) -> dict:
             "Build on what she knows — skip basics she's already seen, go deeper."
         )
 
+    system_content += f"\n\n{_CBSE_CONTEXT}"
+
     messages = [{"role": "system", "content": system_content}] + history
 
     preferred_model = state.get("preferred_model") or None  # None → auto tiered
@@ -676,6 +714,8 @@ def help_response(state: MayaState) -> dict:
             "connect to new concepts she hasn't seen yet."
         )
 
+    system_content += f"\n\n{_CBSE_CONTEXT}"
+
     messages = [{"role": "system", "content": system_content}] + history
 
     preferred_model = state.get("preferred_model") or None  # None → auto tiered
@@ -690,6 +730,128 @@ def help_response(state: MayaState) -> dict:
         "steps": current_steps + [
             f"[help_response/{provider}] → agent='{agent}', intent='{intent}', language='{language}'"
         ],
+    }
+
+
+def reminder_agent(state: MayaState) -> dict:
+    """
+    Node 3e (Session 17): Handles todo/reminder intents.
+
+    Parses the user's request via LLM to determine the action:
+      - "add"  → extract task text (+ optional due_date/recurrence) → add_todo()
+      - "list" → format pending_todos into a friendly message
+      - "done" → mark_todo_done() for the referenced item
+      - "delete" → delete_todo() for the referenced item
+
+    LLM is used only for intent parsing and text extraction — all DB writes
+    go through MemoryStore to keep state clean and testable.
+    """
+    language = state["language"]
+    current_steps = state["steps"]
+    user_input = state["user_input"]
+    pending = state.get("pending_todos", [])
+    is_online = state.get("is_online", False)
+    db_path = state.get("memory_db_path") or None
+
+    # Ask LLM to parse the action and extract structured data
+    parse_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a reminder parser for a children's app. "
+                "Given the user's message, reply with a JSON object (no markdown, no explanation) with:\n"
+                '  "action": "add" | "list" | "done" | "delete"\n'
+                '  "task": the task text if action is add (else null)\n'
+                '  "due_date": optional due date string if mentioned (else null)\n'
+                '  "recurrence": "daily" | "weekly" | null\n'
+                '  "item_number": 1-based index if action is done/delete (else null)\n'
+                "Current pending todos:\n"
+                + (
+                    "\n".join(f"{i+1}. {t['text']}" for i, t in enumerate(pending))
+                    if pending else "(none)"
+                )
+            ),
+        },
+        {"role": "user", "content": user_input},
+    ]
+
+    action = "list"
+    task_text = ""
+    due_date = None
+    recurrence = None
+    item_number = None
+
+    try:
+        import json as _json
+        raw, _ = call_llm_tiered(parse_messages, is_online)
+        # Strip any markdown code fences if the model adds them
+        raw = raw.strip().strip("```json").strip("```").strip()
+        parsed = _json.loads(raw)
+        action = parsed.get("action", "list")
+        task_text = parsed.get("task") or ""
+        due_date = parsed.get("due_date")
+        recurrence = parsed.get("recurrence")
+        item_number = parsed.get("item_number")
+    except Exception:
+        pass  # Fallback: treat as "list" if parsing fails
+
+    store = MemoryStore(db_path=db_path)
+
+    if action == "add" and task_text:
+        new_id = store.add_todo(task_text, due_date=due_date, recurrence=recurrence)
+        due_str = f" by {due_date}" if due_date else ""
+        rec_str = f" (repeats {recurrence})" if recurrence else ""
+        response_map = {
+            "english": f"Got it! I've added '{task_text}'{due_str}{rec_str} to your list.",
+            "hindi":   f"Ho gaya! Maine '{task_text}'{due_str}{rec_str} tumhari list mein add kar diya.",
+            "hinglish": f"Done! '{task_text}'{due_str}{rec_str} tumhari list mein add kar diya.",
+        }
+        # Refresh pending list after add
+        pending = store.get_pending_todos()
+
+    elif action == "done" and item_number and 1 <= item_number <= len(pending):
+        todo = pending[item_number - 1]
+        store.mark_todo_done(todo["id"])
+        response_map = {
+            "english":  f"Great job! I've marked '{todo['text']}' as done.",
+            "hindi":    f"Wah! '{todo['text']}' complete kar diya — bahut accha!",
+            "hinglish": f"Awesome! '{todo['text']}' done mark kar diya!",
+        }
+        pending = store.get_pending_todos()
+
+    elif action == "delete" and item_number and 1 <= item_number <= len(pending):
+        todo = pending[item_number - 1]
+        store.delete_todo(todo["id"])
+        response_map = {
+            "english":  f"Removed '{todo['text']}' from your list.",
+            "hindi":    f"'{todo['text']}' list se hata diya.",
+            "hinglish": f"'{todo['text']}' list se remove kar diya.",
+        }
+        pending = store.get_pending_todos()
+
+    else:
+        # action == "list" or fallback
+        if not pending:
+            response_map = {
+                "english":  "Your todo list is empty! Want to add something?",
+                "hindi":    "Tumhari todo list khali hai! Kuch add karna hai?",
+                "hinglish": "Todo list abhi empty hai! Kuch add karein?",
+            }
+        else:
+            items = "\n".join(f"{i+1}. {t['text']}" for i, t in enumerate(pending))
+            response_map = {
+                "english":  f"Here are your todos:\n{items}",
+                "hindi":    f"Yeh hain tumhare todos:\n{items}",
+                "hinglish": f"Tumhare todos:\n{items}",
+            }
+
+    response = response_map.get(language, response_map["english"])
+
+    return {
+        "response": response,
+        "pending_todos": pending,
+        "message_history": [{"role": "assistant", "content": response}],
+        "steps": current_steps + [f"[reminder_agent] → action='{action}', language='{language}'"],
     }
 
 
@@ -720,6 +882,8 @@ def route_by_intent(state: MayaState) -> str:
         return "greet_response"
     if intent == "farewell":
         return "farewell_response"
+    if intent == "reminder":
+        return "reminder_agent"
 
     # Agent override: "math" forces math tutor regardless of what the user typed
     if agent == "math" or intent == "math":
@@ -758,6 +922,7 @@ def build_conversation_graph():
     graph.add_node("farewell_response",    farewell_response)
     graph.add_node("math_tutor_response",  math_tutor_response)  # Session 6
     graph.add_node("help_response",        help_response)
+    graph.add_node("reminder_agent",       reminder_agent)       # Session 17
     graph.add_node("save_memory",          save_memory)          # Session 5
 
     # Fixed edges
@@ -773,7 +938,8 @@ def build_conversation_graph():
         {
             "greet_response":       "greet_response",
             "farewell_response":    "farewell_response",
-            "math_tutor_response":  "math_tutor_response",   # NEW
+            "reminder_agent":       "reminder_agent",         # Session 17
+            "math_tutor_response":  "math_tutor_response",
             "help_response":        "help_response",
         },
     )
@@ -782,6 +948,7 @@ def build_conversation_graph():
     graph.add_edge("greet_response",      "save_memory")
     graph.add_edge("farewell_response",   "save_memory")
     graph.add_edge("math_tutor_response", "save_memory")    # NEW
+    graph.add_edge("reminder_agent",      "save_memory")    # Session 17
     graph.add_edge("help_response",       "save_memory")
     graph.add_edge("save_memory",       END)
 

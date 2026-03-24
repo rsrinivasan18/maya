@@ -3,8 +3,11 @@ MAYA LLM Router - Session 11 (LiteLLM refactor)
 =================================================
 Tiered LLM fallback chain using LiteLLM as a unified interface.
 
-Tier order (online):   Sarvam API → Claude API → OpenAI API → Ollama
+Tier order (online):   Claude API → OpenAI API → Ollama
 Tier order (offline):  Ollama directly (no wasted network calls)
+
+Sarvam is NOT used for text generation.
+Sarvam is used only for TTS (Hindi speech output) and STT (voice input) — handled separately.
 
 Each tier:
   - Only tried if the API key is present (settings.HAS_*_KEY)
@@ -60,26 +63,14 @@ litellm.set_verbose = False
 # Each entry: (provider_label, litellm_model_string, extra_kwargs)
 # Online tiers tried in order; first success wins.
 
-_SARVAM_KEY = os.getenv("SARVAM_API_KEY", "")
-
 _TIERS_ONLINE: list[tuple[str, str, dict]] = [
-    # Tier 1 — Sarvam: best Hindi/Hinglish quality, built for Indian languages
-    (
-        "sarvam",
-        "openai/sarvam-m",
-        {
-            "api_base": "https://api.sarvam.ai/v1",
-            "api_key": _SARVAM_KEY,
-            "extra_headers": {"api-subscription-key": _SARVAM_KEY},
-        },
-    ),
-    # Tier 2 — Claude: high quality, excellent at explanations and reasoning
+    # Tier 1 — Claude: primary text brain; strong reasoning, STEM explanations
     (
         "claude",
-        "anthropic/claude-haiku-4-5-20251001",
+        "anthropic/claude-sonnet-4-5",
         {},
     ),
-    # Tier 3 — OpenAI: wide availability, cost-effective (gpt-4o-mini)
+    # Tier 2 — OpenAI: fallback if Claude API is down or key missing
     (
         "openai",
         "openai/gpt-4o-mini",
@@ -96,7 +87,6 @@ _TIER_OLLAMA: tuple[str, str, dict] = ("ollama", "ollama/llama3.2:3b", {})
 def _key_available(label: str) -> bool:
     """Return True if the API key for this tier is present in settings."""
     return {
-        "sarvam": settings.HAS_SARVAM_KEY,
         "claude": settings.HAS_ANTHROPIC_KEY,
         "openai": settings.HAS_OPENAI_KEY,
         "ollama": True,  # Ollama needs no key

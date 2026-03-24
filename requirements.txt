@@ -41,3 +41,7 @@ piper-tts>=1.4.0               # TTS - neural offline voices via ONNX
 fastapi>=0.115.0               # Async web framework — serves UI + WebSocket chat endpoint
 uvicorn>=0.30.0                # ASGI server — run with: uvicorn src.maya.web.app:app --reload
 websockets>=12.0               # WebSocket support for uvicorn
+
+# ─── AWS Deployment: SQLAlchemy (PostgreSQL + SQLite unified interface) ────
+sqlalchemy>=2.0.0              # DB abstraction — SQLite locally, PostgreSQL on AWS RDS
+psycopg2-binary>=2.9.0         # PostgreSQL driver (binary wheel — no C compiler needed)

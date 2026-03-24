@@ -9,6 +9,86 @@
 
 'use strict';
 
+// ── PIN lock ──────────────────────────────────────────────────────────────────
+(function pinLock() {
+  const CORRECT = '2026';
+  const LS_KEY  = 'maya_pin_ok';
+  const overlay = document.getElementById('pin-overlay');
+
+  // Already unlocked this session → remove overlay immediately, no animation
+  if (localStorage.getItem(LS_KEY) === '1') {
+    overlay.remove();
+    return;
+  }
+
+  let digits = '';
+
+  const dots    = [0,1,2,3].map(i => document.getElementById('pin-d' + i));
+  const dotsWrap = document.getElementById('pin-dots');
+  const errEl   = document.getElementById('pin-error');
+
+  function renderDots() {
+    dots.forEach((d, i) => {
+      d.classList.toggle('filled', i < digits.length);
+      d.classList.remove('error');
+    });
+    errEl.hidden = true;
+  }
+
+  function showError() {
+    dots.forEach(d => { d.classList.remove('filled'); d.classList.add('error'); });
+    errEl.hidden = false;
+    dotsWrap.classList.add('shake');
+    dotsWrap.addEventListener('animationend', () => {
+      dotsWrap.classList.remove('shake');
+    }, { once: true });
+    // Clear after 650ms so user can try again
+    setTimeout(() => {
+      digits = '';
+      renderDots();
+    }, 650);
+  }
+
+  function unlock() {
+    localStorage.setItem(LS_KEY, '1');
+    overlay.classList.add('pin-fade-out');
+    overlay.addEventListener('transitionend', () => overlay.remove(), { once: true });
+  }
+
+  function pressDigit(d) {
+    if (digits.length >= 4) return;
+    digits += d;
+    renderDots();
+    if (digits.length === 4) {
+      if (digits === CORRECT) {
+        unlock();
+      } else {
+        showError();
+      }
+    }
+  }
+
+  function pressDelete() {
+    if (digits.length > 0) {
+      digits = digits.slice(0, -1);
+      renderDots();
+    }
+  }
+
+  // Numpad button clicks
+  document.querySelectorAll('.pin-key[data-n]').forEach(btn => {
+    btn.addEventListener('click', () => pressDigit(btn.dataset.n));
+  });
+  document.getElementById('pin-del').addEventListener('click', pressDelete);
+
+  // Physical keyboard
+  document.addEventListener('keydown', (e) => {
+    if (!document.getElementById('pin-overlay')) return; // overlay already gone
+    if (e.key >= '0' && e.key <= '9') { pressDigit(e.key); }
+    else if (e.key === 'Backspace')    { pressDelete(); }
+  });
+})();
+
 // ── DOM References ────────────────────────────────────────────────────────────
 const el = {
   statusDot:      document.getElementById('status-dot'),
@@ -33,10 +113,11 @@ const el = {
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let ws            = null;
-let reconnectMs   = 1000;
 let currentChar   = localStorage.getItem('maya_char') || '🦋';
 let isConnected   = false;
+let isBusy        = false;       // true while a /chat request is in flight
+let sessionId     = '';          // assigned by /api/session
+let messageHistory = [];         // accumulated across turns, sent with each request
 let lastDoneState = 'idle';   // Avatar state to restore after talking ends
 let captionTimer  = null;     // Auto-hide caption timer
 
@@ -140,10 +221,19 @@ function hideCaption() {
   el.caption?.classList.remove('visible');
 }
 
+function stripEmoji(text) {
+  // Remove emoji and pictographic characters before TTS — they'd be read aloud
+  return String(text)
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function speakText(text, lang) {
   if (!voiceEnabled || !window.speechSynthesis) return;
 
   speechSynthesis.cancel();
+  text = stripEmoji(stripMarkdownForTTS(text));
 
   const utt = new SpeechSynthesisUtterance(text);
   utt.rate  = 0.92;
@@ -170,7 +260,7 @@ function speakText(text, lang) {
     setAvatarState(lastDoneState);
     hideCaption();
     el.micBtn.classList.remove('maya-talking');
-    el.micBtn.title = 'Tap to speak';
+    el.micBtn.title = 'Hold to speak';
   };
 
   safetyTimer = setTimeout(_onTalkEnd, safetyMs);
@@ -179,7 +269,7 @@ function speakText(text, lang) {
     isTalking = true;
     setAvatarState('talking');
     el.micBtn.classList.add('maya-talking');
-    el.micBtn.title = 'Tap to interrupt';
+    el.micBtn.title = 'Hold to interrupt';
   };
   utt.onend   = _onTalkEnd;
   utt.onerror = _onTalkEnd;
@@ -226,93 +316,84 @@ if (SpeechRecognition) {
 
   recognition.onend = () => {
     isListening = false;
-    el.micBtn.classList.remove('listening');
-    el.micBtn.title = 'Voice input';
-    if (el.input.value.trim() && isConnected) sendMessage();
+    el.micBtn.classList.remove('ptt-active');
+    el.micBtn.title = 'Hold to speak';
+    if (el.input.value.trim() && isConnected && !isBusy) sendMessage();
   };
 
   recognition.onerror = (event) => {
     isListening = false;
-    el.micBtn.classList.remove('listening');
-    el.micBtn.title = 'Voice input';
+    el.micBtn.classList.remove('ptt-active');
+    el.micBtn.title = 'Hold to speak';
     if (event.error !== 'no-speech') {
       console.warn('MAYA voice input error:', event.error);
     }
   };
 }
 
-function toggleListening() {
+// ── Push-to-talk: hold to record, release to send ────────────────────────────
+function startListening() {
   if (!recognition) {
-    // SpeechRecognition unavailable — needs HTTPS or localhost
     el.input.placeholder = 'Mic needs HTTPS or localhost — type your message';
-    setTimeout(() => {
-      el.input.placeholder = 'Ask me anything…';
-    }, 3500);
+    setTimeout(() => { el.input.placeholder = 'Ask me anything…'; }, 3500);
     return;
   }
-
-  // Tap mic = always interrupt MAYA if she's speaking first
+  // Interrupt MAYA if she's speaking
   if (isTalking || window.speechSynthesis?.speaking) {
     speechSynthesis.cancel();
     isTalking = false;
     setAvatarState(lastDoneState);
     hideCaption();
     el.micBtn.classList.remove('maya-talking');
-    el.micBtn.title = 'Voice input';
-    // If we weren't already listening, now start listening
-    if (!isListening) {
-      try {
-        recognition.start();
-        isListening = true;
-        el.micBtn.classList.add('listening');
-        el.micBtn.title = 'Tap to stop';
-      } catch (_) { /* recognition already running */ }
-    }
-    return;
   }
-
-  if (isListening) {
-    recognition.stop();
-  } else {
-    try {
-      recognition.start();
-      isListening = true;
-      el.micBtn.classList.add('listening');
-      el.micBtn.title = 'Tap to stop';
-    } catch (_) { /* already running */ }
-  }
+  if (isListening) return;
+  try {
+    recognition.start();
+    isListening = true;
+    el.micBtn.classList.add('ptt-active');
+    el.micBtn.title = 'Release to send';
+  } catch (_) { /* already running */ }
 }
 
-el.micBtn.addEventListener('click', toggleListening);
+function stopListening() {
+  if (!isListening) return;
+  recognition.stop(); // triggers onend → cleans up class → sendMessage
+}
+
+// Mouse: press and hold on desktop
+el.micBtn.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  startListening();
+  document.addEventListener('mouseup', stopListening, { once: true });
+});
+
+// Touch: hold on mobile/tablet
+el.micBtn.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  startListening();
+}, { passive: false });
+
+el.micBtn.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  stopListening();
+}, { passive: false });
+
+el.micBtn.addEventListener('touchcancel', stopListening);
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
+// ── HTTP streaming transport ──────────────────────────────────────────────────
 
-  ws.onopen = () => {
-    setStatus('connected', 'warn');    // Waiting for "connected" message
-    reconnectMs = 1000;
-  };
-
-  ws.onclose = () => {
-    isConnected = false;
-    el.sendBtn.disabled = true;
-    setStatus(`reconnecting in ${reconnectMs / 1000}s…`, 'offline');
-    setAvatarState('idle');
-    setTimeout(connect, reconnectMs);
-    reconnectMs = Math.min(reconnectMs * 2, 20000);
-  };
-
-  ws.onerror = () => { /* onclose fires after onerror — handled there */ };
-
-  ws.onmessage = (event) => {
-    try {
-      onMessage(JSON.parse(event.data));
-    } catch (e) {
-      console.error('MAYA: bad message:', event.data, e);
-    }
-  };
+async function initSession() {
+  setStatus('connecting…', 'warn');
+  try {
+    const res  = await fetch('/api/session');
+    const data = await res.json();
+    sessionId = data.session_id;
+    onMessage(data);   // fires 'connected' handler — sets isConnected, updates status
+  } catch (e) {
+    setStatus('offline — retrying…', 'offline');
+    setTimeout(initSession, 3000);
+  }
 }
 
 // ── Incoming message handler ──────────────────────────────────────────────────
@@ -326,6 +407,7 @@ function onMessage(data) {
       setAvatarState('idle');
       addSystemMessage(`Session ${data.session_count}  ·  Hi, ${data.user_name}! 🦋`);
       refreshSidebar();
+      refreshTodos();
       break;
 
     case 'thinking':
@@ -337,6 +419,7 @@ function onMessage(data) {
       hideThinking();
       // Double-strip on client side — catches any think tags the server missed
       const cleanText = stripThink(data.text);
+      if (!cleanText) break;   // Never render an empty bubble
       addMessage('maya', cleanText, {
         intent:   data.intent,
         language: data.language,
@@ -355,6 +438,7 @@ function onMessage(data) {
       // Speak the response — avatar switches to 'talking' during playback
       speakText(cleanText, data.language);
       setTimeout(refreshSidebar, 1200);
+      if (data.intent === 'reminder') setTimeout(refreshTodos, 1200);
       break;
     }
 
@@ -368,24 +452,65 @@ function onMessage(data) {
 }
 
 // ── Send message ──────────────────────────────────────────────────────────────
-function sendMessage() {
+async function sendMessage() {
   const text = el.input.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!text || isBusy || !isConnected) return;
 
   // Stop any active voice input before sending
   if (isListening && recognition) recognition.stop();
 
   addMessage('user', text);
-  el.sendBtn.disabled = true;   // Re-enabled when response arrives
-
-  ws.send(JSON.stringify({
-    text:  text,
-    model: el.modelSelect.value,
-    agent: el.agentSelect.value,
-  }));
+  el.sendBtn.disabled = true;
+  isBusy = true;
 
   el.input.value = '';
   el.input.style.height = 'auto';
+
+  try {
+    const res = await fetch('/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        text,
+        model:           el.modelSelect.value,
+        agent:           el.agentSelect.value,
+        session_id:      sessionId,
+        message_history: messageHistory,
+      }),
+    });
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();   // keep any incomplete trailing line
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          // Server echoes updated history — store it for next turn
+          if (data.message_history) {
+            messageHistory = data.message_history;
+            delete data.message_history;
+          }
+          onMessage(data);
+        } catch (e) {
+          console.error('MAYA: bad line:', line, e);
+        }
+      }
+    }
+  } catch (e) {
+    onMessage({ type: 'error', text: 'Connection error. Please try again.' });
+  }
+
+  isBusy = false;
+  el.sendBtn.disabled = !el.input.value.trim() || !isConnected;
+  // (input is already cleared above — this just re-enables if user typed while waiting)
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────────
@@ -416,7 +541,7 @@ function addMessage(role, text, meta = {}) {
     wrap.innerHTML = `
       <span class="message-avatar">${currentChar}</span>
       <div class="message-content">
-        <div class="bubble">${escapeHtml(text)}</div>
+        <div class="bubble">${renderMarkdown(text)}</div>
         ${badges}
       </div>`;
   } else {
@@ -552,9 +677,11 @@ document.querySelectorAll('.sidebar-tab').forEach(btn => {
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     const tab = btn.dataset.tab;
-    document.getElementById('panel-history').hidden = (tab !== 'history');
-    document.getElementById('panel-persona').hidden = (tab !== 'persona');
-    if (tab === 'persona') loadPersonaConfig();
+    document.getElementById('panel-history').hidden   = (tab !== 'history');
+    document.getElementById('panel-reminders').hidden = (tab !== 'reminders');
+    document.getElementById('panel-persona').hidden   = (tab !== 'persona');
+    if (tab === 'persona')   loadPersonaConfig();
+    if (tab === 'reminders') refreshTodos();
   });
 });
 
@@ -602,6 +729,75 @@ function showPersonaToast() {
 }
 
 document.getElementById('save-persona-btn')?.addEventListener('click', savePersonaConfig);
+
+// ── Todos / Reminders ─────────────────────────────────────────────────────────
+async function refreshTodos() {
+  try {
+    const res  = await fetch('/api/todos');
+    const data = await res.json();
+    renderTodoList(data.todos || []);
+    updateTodoBadge(data.todos || []);
+  } catch (_) { /* server unreachable */ }
+}
+
+function renderTodoList(todos) {
+  const ul = document.getElementById('todo-list');
+  if (!ul) return;
+  if (!todos.length) {
+    ul.innerHTML = '<li class="empty">No reminders yet!</li>';
+    return;
+  }
+  ul.innerHTML = todos.map(t => `
+    <li class="todo-item" data-id="${t.id}">
+      <button class="todo-done-btn" title="Mark done" data-id="${t.id}">✓</button>
+      <span class="todo-text">${escapeHtml(t.text)}${t.due_date ? `<span class="todo-due-label"> · ${escapeHtml(t.due_date)}</span>` : ''}</span>
+      <button class="todo-del-btn" title="Delete" data-id="${t.id}">×</button>
+    </li>`).join('');
+
+  ul.querySelectorAll('.todo-done-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/todos/${btn.dataset.id}/done`, { method: 'PATCH' });
+      refreshTodos();
+    });
+  });
+  ul.querySelectorAll('.todo-del-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/todos/${btn.dataset.id}`, { method: 'DELETE' });
+      refreshTodos();
+    });
+  });
+}
+
+function updateTodoBadge(todos) {
+  const badge = document.getElementById('todo-badge');
+  if (!badge) return;
+  if (todos.length > 0) {
+    badge.textContent = todos.length;
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+async function addTodoFromUI() {
+  const input = document.getElementById('todo-input');
+  const due   = document.getElementById('todo-due');
+  const text  = input?.value.trim();
+  if (!text) return;
+  await fetch('/api/todos', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ text, due_date: due?.value || null }),
+  });
+  if (input) input.value = '';
+  if (due)   due.value   = '';
+  refreshTodos();
+}
+
+document.getElementById('todo-add-btn')?.addEventListener('click', addTodoFromUI);
+document.getElementById('todo-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addTodoFromUI(); }
+});
 
 // ── Input handling ────────────────────────────────────────────────────────────
 el.input.addEventListener('input', () => {
@@ -661,6 +857,72 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Render markdown to safe HTML for MAYA chat bubbles.
+ * Escapes HTML first (XSS-safe), then applies markdown patterns.
+ * Handles: ## headings, **bold**, - bullets, 1. numbered lists, line breaks.
+ */
+function renderMarkdown(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  let listTag = null;
+
+  function closeList() {
+    if (listTag) { out.push(`</${listTag}>`); listTag = null; }
+  }
+
+  function inlineFormat(raw) {
+    let t = escapeHtml(raw);
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    return t;
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    const hMatch = trimmed.match(/^#{1,3} (.+)/);
+    if (hMatch) { closeList(); out.push(`<strong class="md-heading">${inlineFormat(hMatch[1])}</strong><br>`); continue; }
+
+    const ulMatch = trimmed.match(/^[-*] (.+)/);
+    if (ulMatch) {
+      if (listTag !== 'ul') { closeList(); out.push('<ul>'); listTag = 'ul'; }
+      out.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
+      continue;
+    }
+
+    const olMatch = trimmed.match(/^(\d+)\. (.+)/);
+    if (olMatch) {
+      if (listTag !== 'ol') { closeList(); out.push('<ol>'); listTag = 'ol'; }
+      out.push(`<li>${inlineFormat(olMatch[2])}</li>`);
+      continue;
+    }
+
+    closeList();
+    if (trimmed === '') { out.push('<br>'); continue; }
+    out.push(inlineFormat(trimmed) + '<br>');
+  }
+  closeList();
+  return out.join('').replace(/(<br>)+$/, '');
+}
+
+/**
+ * Strip markdown syntax before TTS so it is not read aloud.
+ * "## Dancing Raisins" → "Dancing Raisins"
+ * "**What you need:**" → "What you need:"
+ */
+function stripMarkdownForTTS(text) {
+  return String(text)
+    .replace(/#{1,3} /g, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/^[-*] /gm, '')
+    .replace(/^\d+\. /gm, '')
+    .replace(/\n+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function escapeAttr(str) {
   return String(str).replace(/"/g, '&quot;');
 }
@@ -718,7 +980,7 @@ function scrollToBottom() {
     document.addEventListener('mouseup', onEnd);
   });
 
-  handle.addEventListener('touchstart', (e) => {
+  handle.addEventListener('touchstart', (_e) => {
     dragging = true;
     handle.classList.add('dragging');
     document.addEventListener('touchmove', onMove, { passive: false });
@@ -727,6 +989,6 @@ function scrollToBottom() {
 }());
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-loadModels();     // Populate model selector from /api/models
-connect();        // Open WebSocket connection
-resetIdleTimer(); // Start idle timer
+loadModels();      // Populate model selector from /api/models
+initSession();     // Start session via GET /api/session (replaces WebSocket)
+resetIdleTimer();  // Start idle timer

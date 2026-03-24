@@ -1,0 +1,5 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — never commit it.
+
+region      = "ap-southeast-1"
+db_password = "REPLACE_ME_strong_password_min8chars"

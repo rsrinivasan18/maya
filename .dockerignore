@@ -1,0 +1,39 @@
+# ── MAYA .dockerignore ────────────────────────────────────────────────────────
+# Keeps the Docker build context small — only what the app needs at runtime.
+
+# Secrets — never bake into image
+.env
+*.env
+
+# Dev tools
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Tests — not needed at runtime
+tests/
+
+# Local terminal entrypoint — web uses uvicorn, not chat_loop
+chat_loop.py
+
+# Git and IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Docs and task files
+docs/
+tasks/
+CLAUDE.md
+*.md
+
+# LangGraph local dev server
+.langgraph_api/
+
+# Windows artefacts
+Thumbs.db
+desktop.ini

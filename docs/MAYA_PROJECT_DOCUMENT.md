@@ -1,9 +1,9 @@
 # MAYA — Project Requirements & Technical Architecture Document
 
-**Version:** 1.2
-**Date:** 2026-03-02
+**Version:** 1.7
+**Date:** 2026-03-24
 **Author:** Srinivasan (rsrinivasan18)
-**Status:** Active Development — Session 9 complete (Laptop Phase)
+**Status:** Active Development — Session 17 complete (AWS Cloud Phase) — Live at https://www.mayaai.ink
 
 ---
 

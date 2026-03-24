@@ -8,55 +8,54 @@ Stores:
   - Topic log: every user message + semantic topic (extracted by LLM) + intent
   - Session summaries: one-sentence episodic summary per session (from farewell node)
   - Mastery log: how many times Srinika has explored each topic (procedural memory)
+  - Persona config: editable MAYA behaviour settings (Session 14)
+  - Todos: Srinika's reminders and task list (Session 17)
 
-DB location: ~/.maya/memory.db
+DB location: ~/.maya/memory.db (SQLite) or DATABASE_URL (PostgreSQL)
 
 LEARNING NOTES for Srinivasan:
 ---------------------------------
-Why SQLite?
-  - Single file, no server, works offline — perfect for RPi5 later
-  - Python's built-in sqlite3 module (no pip install needed!)
-  - The DB file persists across sessions = MAYA has real persistent memory
+Why SQLAlchemy instead of sqlite3?
+  - One interface for BOTH SQLite (local/offline) and PostgreSQL (cloud/AWS)
+  - create_engine() picks the right driver from the connection URL
+  - text() lets us write raw SQL — familiar, readable, no magic ORM
+  - engine.begin() = auto-commit on success, auto-rollback on exception
 
-Why MemoryStore instantiated fresh per node call?
-  - No global state, no singleton → clean, testable
-  - Each instantiation opens a connection, does its work, closes it
-  - Tests pass a tmp_path DB (clean slate) via memory_db_path state field
-  - Production uses ~/.maya/memory.db (grows across sessions)
+Why DATABASE_URL?
+  - The standard way to pass a DB connection string in 12-factor apps
+  - AWS App Runner / Heroku / Railway all use DATABASE_URL
+  - Local dev / tests just don't set it → falls back to SQLite (zero config)
 
-Why one profile row? (CHECK id = 1)
-  - SQLite trick: enforce exactly one row with a CHECK constraint
-  - INSERT OR IGNORE seeds it on first run, never duplicates
-  - Much simpler than a key-value table for a single-user app
-
-Session 9 — Three memory improvements:
-  1. Semantic memory (topic column):
-     Each turn stores a 2-4 word LLM-extracted topic (e.g. "photosynthesis",
-     "Newton laws motion") instead of the raw user_input verbatim.
-     get_recent_topics() returns topic (or falls back to message if blank).
-
-  2. Episodic memory (sessions table):
-     On farewell, a background thread generates a 1-sentence session summary
-     (e.g. "Srinika explored gravity and the water cycle").
-     Loaded next session and shown in the greeting: Srinika sees what she
-     studied last time, not a mechanical transcript of her own words.
-
-  3. Procedural memory (mastery table):
-     Each time a topic is extracted, its count is incremented in the mastery table.
-     Levels: curious (1x) → learning (2x) → practiced (3-4x) → expert (5+x).
-     Surfaced in greet_response ("You've explored photosynthesis 4 times!") and
-     injected into LLM system prompts so MAYA builds on prior knowledge.
+Why ON CONFLICT DO NOTHING instead of INSERT OR IGNORE?
+  - SQLite 3.24+ (2018) and PostgreSQL both support this ANSI syntax
+  - INSERT OR IGNORE is SQLite-only; ON CONFLICT is portable
+  - Python 3.10+ ships with SQLite 3.37+ — safe on every supported platform
 """
 
+import os
 import re
-import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Integer,
+    MetaData,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy import text as sa_text
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
-def _strip_think_tags(text: str) -> str:
+
+def _strip_think_tags(t: str) -> str:
     """Remove <think>...</think> blocks that some LLMs leak into output."""
-    return _THINK_RE.sub("", text).strip()
+    return _THINK_RE.sub("", t).strip()
+
 
 DEFAULT_DB_PATH = Path.home() / ".maya" / "memory.db"
 DEFAULT_USER_NAME = "Srinika"  # Week 6: replace with voice-based name detection
@@ -78,15 +77,26 @@ def _mastery_level(count: int) -> str:
     return "curious"
 
 
+def _now() -> str:
+    """Current UTC time as ISO string — passed explicitly to avoid dialect differences."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 class MemoryStore:
     """
-    SQLite-backed persistent memory for MAYA.
+    SQLAlchemy-backed persistent memory for MAYA.
+
+    Supports SQLite (local dev / Raspberry Pi) and PostgreSQL (AWS RDS).
+    Connection controlled by DATABASE_URL env var; falls back to db_path for tests.
 
     Tables
     ------
-    profile:  Exactly one row — user_name, session_count, total_turns
-    topics:   Append-only turn log — session_id, message, topic, intent, timestamp
-    sessions: One row per session — session_id, summary (episodic)
+    profile:       Exactly one row — user_name, session_count, total_turns
+    topics:        Append-only turn log — session_id, message, topic, intent, timestamp
+    sessions:      One row per session — session_id, summary (episodic)
+    mastery:       Exploration counts per topic (procedural memory)
+    persona_config: Editable MAYA behaviour settings (tone, language, grade_level…)
+    todos:         Srinika's reminders and task list
 
     Usage
     -----
@@ -102,102 +112,127 @@ class MemoryStore:
     """
 
     def __init__(self, db_path: str | None = None) -> None:
-        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        database_url = os.getenv("DATABASE_URL")
+
+        if database_url:
+            # Production: PostgreSQL on AWS RDS (or any other DATABASE_URL)
+            self._engine = create_engine(database_url)
+        elif db_path:
+            # Tests / explicit override: SQLite at the given path
+            path = Path(db_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._engine = create_engine(
+                f"sqlite:///{path}",
+                connect_args={"check_same_thread": False},
+            )
+        else:
+            # Default: SQLite at ~/.maya/memory.db
+            DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._engine = create_engine(
+                f"sqlite:///{DEFAULT_DB_PATH}",
+                connect_args={"check_same_thread": False},
+            )
+
         self._init_db()
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
     def _init_db(self) -> None:
-        """Create tables and seed the profile row on first run."""
-        with self._connect() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS profile (
-                    id            INTEGER PRIMARY KEY CHECK (id = 1),
-                    user_name     TEXT    NOT NULL DEFAULT 'Srinika',
-                    session_count INTEGER NOT NULL DEFAULT 0,
-                    total_turns   INTEGER NOT NULL DEFAULT 0
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS topics (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id INTEGER NOT NULL DEFAULT 0,
-                    message    TEXT    NOT NULL,
-                    topic      TEXT    NOT NULL DEFAULT '',
-                    intent     TEXT    NOT NULL DEFAULT 'general',
-                    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
-                )
-            """)
-            # Session 9: safe migration for existing DBs that predate the topic column.
-            # ALTER TABLE ADD COLUMN fails silently if the column already exists.
+        """
+        Create tables using SQLAlchemy metadata (dialect-aware DDL).
+
+        SQLAlchemy generates correct CREATE TABLE statements for each database
+        engine — INTEGER PRIMARY KEY becomes SERIAL in PostgreSQL automatically.
+        checkfirst=True means existing tables are never dropped or modified.
+        """
+        meta = MetaData()
+
+        Table(
+            "profile", meta,
+            Column("id", Integer, primary_key=True, autoincrement=False),
+            Column("user_name", Text, nullable=False, server_default="Srinika"),
+            Column("session_count", Integer, nullable=False, server_default="0"),
+            Column("total_turns", Integer, nullable=False, server_default="0"),
+            CheckConstraint("id = 1", name="ck_profile_singleton"),
+        )
+        Table(
+            "topics", meta,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("session_id", Integer, nullable=False, server_default="0"),
+            Column("message", Text, nullable=False),
+            Column("topic", Text, nullable=False, server_default=""),
+            Column("intent", Text, nullable=False, server_default="general"),
+            Column("timestamp", Text, nullable=False, server_default="CURRENT_TIMESTAMP"),
+        )
+        Table(
+            "sessions", meta,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("session_id", Integer, nullable=False, server_default="0"),
+            Column("summary", Text, nullable=False, server_default=""),
+            Column("timestamp", Text, nullable=False, server_default="CURRENT_TIMESTAMP"),
+        )
+        Table(
+            "mastery", meta,
+            Column("topic_key", Text, primary_key=True),
+            Column("display", Text, nullable=False),
+            Column("count", Integer, nullable=False, server_default="1"),
+            Column("first_seen", Text, nullable=False, server_default="CURRENT_TIMESTAMP"),
+            Column("last_seen", Text, nullable=False, server_default="CURRENT_TIMESTAMP"),
+        )
+        Table(
+            "persona_config", meta,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("persona_name", Text, nullable=False, server_default="srinika"),
+            Column("field_key", Text, nullable=False),
+            Column("field_value", Text, nullable=False),
+            Column("updated_at", Text, server_default="CURRENT_TIMESTAMP"),
+            UniqueConstraint("persona_name", "field_key", name="uq_persona_field"),
+        )
+        Table(
+            "todos", meta,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("text", Text, nullable=False),
+            Column("created_at", Text, nullable=False, server_default="CURRENT_TIMESTAMP"),
+            Column("done", Integer, nullable=False, server_default="0"),
+            Column("done_at", Text),
+            Column("due_date", Text),
+            Column("recurrence", Text),
+        )
+
+        meta.create_all(self._engine, checkfirst=True)
+
+        # Backward compat: add topic column to existing SQLite DBs that predate Session 9.
+        # create_all(checkfirst=True) skips existing tables — it won't add missing columns.
+        # ALTER TABLE ADD COLUMN fails silently if the column already exists.
+        with self._engine.begin() as conn:
             try:
-                conn.execute(
+                conn.execute(sa_text(
                     "ALTER TABLE topics ADD COLUMN topic TEXT NOT NULL DEFAULT ''"
-                )
+                ))
             except Exception:
                 pass  # Column already exists — ignore
 
-            # Session 9: episodic session summaries table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id INTEGER NOT NULL DEFAULT 0,
-                    summary    TEXT    NOT NULL DEFAULT '',
-                    timestamp  TEXT    NOT NULL DEFAULT (datetime('now'))
-                )
-            """)
+        # Seed exactly one profile row on first run.
+        # Seed default persona config for 'srinika' on first run.
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "INSERT INTO profile (id, user_name, session_count, total_turns) "
+                "VALUES (1, :name, 0, 0) ON CONFLICT DO NOTHING"
+            ), {"name": DEFAULT_USER_NAME})
 
-            # Session 10: procedural memory — how many times each topic was explored
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS mastery (
-                    topic_key  TEXT    PRIMARY KEY,
-                    display    TEXT    NOT NULL,
-                    count      INTEGER NOT NULL DEFAULT 1,
-                    first_seen TEXT    NOT NULL DEFAULT (datetime('now')),
-                    last_seen  TEXT    NOT NULL DEFAULT (datetime('now'))
-                )
-            """)
-
-            # Session 14: editable persona configuration
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS persona_config (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    persona_name TEXT NOT NULL DEFAULT 'srinika',
-                    field_key    TEXT NOT NULL,
-                    field_value  TEXT NOT NULL,
-                    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(persona_name, field_key)
-                )
-            """)
-
-            # Seed exactly one profile row if the DB is brand new.
-            # INSERT OR IGNORE: if id=1 already exists, does nothing.
-            conn.execute("""
-                INSERT OR IGNORE INTO profile (id, user_name, session_count, total_turns)
-                VALUES (1, ?, 0, 0)
-            """, (DEFAULT_USER_NAME,))
-
-            # Seed default persona config for 'srinika' on first run.
             _srinika_defaults = [
-                ('srinika', 'tone',           'warm and playful didi, never formal'),
-                ('srinika', 'language',       'Hindi and English mixed — Hinglish OK'),
-                ('srinika', 'grade_level',    'Grade 4, age 9'),
-                ('srinika', 'greeting_style', 'Short and warm. Never mention session numbers, mastery counts, or past learning history. Just say hello and ask what to explore today.'),
-                ('srinika', 'response_style', 'Use Indian analogies (chai, roti, cricket). Keep responses short. Always end with one fun question.'),
-                ('srinika', 'avoid',          'Never say session number. Never say mastery count. Never summarize past sessions in greeting. Sidebar handles metadata — not you.'),
+                ("srinika", "tone",           "warm and playful didi, never formal"),
+                ("srinika", "language",       "Hindi and English mixed — Hinglish OK"),
+                ("srinika", "grade_level",    "Grade 4, age 9"),
+                ("srinika", "greeting_style", "Short and warm. Never mention session numbers, mastery counts, or past learning history. Just say hello and ask what to explore today."),
+                ("srinika", "response_style", "Use Indian analogies (chai, roti, cricket). Keep responses short. Always end with one fun question."),
+                ("srinika", "avoid",          "Never say session number. Never say mastery count. Never summarize past sessions in greeting. Sidebar handles metadata — not you."),
             ]
-            for persona_name, field_key, field_value in _srinika_defaults:
-                conn.execute(
-                    "INSERT OR IGNORE INTO persona_config (persona_name, field_key, field_value) VALUES (?, ?, ?)",
-                    (persona_name, field_key, field_value),
-                )
-            conn.commit()
+            for pn, fk, fv in _srinika_defaults:
+                conn.execute(sa_text(
+                    "INSERT INTO persona_config (persona_name, field_key, field_value) "
+                    "VALUES (:pn, :fk, :fv) ON CONFLICT DO NOTHING"
+                ), {"pn": pn, "fk": fk, "fv": fv})
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -206,22 +241,21 @@ class MemoryStore:
         Increment session_count and return the new value (= current session ID).
         Call exactly ONCE at chat_loop startup, not per turn.
         """
-        with self._connect() as conn:
-            conn.execute(
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
                 "UPDATE profile SET session_count = session_count + 1 WHERE id = 1"
-            )
-            conn.commit()
-            row = conn.execute(
+            ))
+            row = conn.execute(sa_text(
                 "SELECT session_count FROM profile WHERE id = 1"
-            ).fetchone()
+            )).mappings().fetchone()
             return row["session_count"]
 
     def get_profile(self) -> dict:
         """Return {user_name, session_count, total_turns}."""
-        with self._connect() as conn:
-            row = conn.execute(
+        with self._engine.begin() as conn:
+            row = conn.execute(sa_text(
                 "SELECT user_name, session_count, total_turns FROM profile WHERE id = 1"
-            ).fetchone()
+            )).mappings().fetchone()
             if row is None:
                 return {
                     "user_name": DEFAULT_USER_NAME,
@@ -238,10 +272,10 @@ class MemoryStore:
         falls back to the raw message. This gives human-readable topics like
         "photosynthesis" instead of verbatim "What is photosynthesis exactly?".
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT message, topic FROM topics ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+        with self._engine.begin() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT message, topic FROM topics ORDER BY id DESC LIMIT :lim"
+            ), {"lim": limit}).mappings().fetchall()
             return [
                 _strip_think_tags(row["topic"] if row["topic"] else row["message"])
                 for row in rows
@@ -265,15 +299,14 @@ class MemoryStore:
             topic:      LLM-extracted 2-4 word semantic summary (e.g. "gravity waves").
                         If blank, get_recent_topics() will fall back to message.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO topics (session_id, message, topic, intent) VALUES (?, ?, ?, ?)",
-                (session_id, message, topic, intent),
-            )
-            conn.execute(
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "INSERT INTO topics (session_id, message, topic, intent) "
+                "VALUES (:sid, :msg, :topic, :intent)"
+            ), {"sid": session_id, "msg": message, "topic": topic, "intent": intent})
+            conn.execute(sa_text(
                 "UPDATE profile SET total_turns = total_turns + 1 WHERE id = 1"
-            )
-            conn.commit()
+            ))
 
     def save_session_summary(self, session_id: int, summary: str) -> None:
         """
@@ -283,18 +316,16 @@ class MemoryStore:
         says goodbye. The summary is loaded next session in load_memory and
         shown in greet_response so she sees what she explored last time.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO sessions (session_id, summary) VALUES (?, ?)",
-                (session_id, summary),
-            )
-            conn.commit()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "INSERT INTO sessions (session_id, summary) VALUES (:sid, :summary)"
+            ), {"sid": session_id, "summary": summary})
 
     def update_mastery(self, topic: str) -> None:
         """
         Increment the exploration count for a topic (procedural memory).
 
-        Uses SQLite's UPSERT (INSERT OR REPLACE equivalent) via ON CONFLICT:
+        Uses a portable UPSERT (ON CONFLICT ... DO UPDATE):
         - If topic_key not seen before → insert with count=1
         - If already seen → increment count + update last_seen + update display
 
@@ -305,19 +336,18 @@ class MemoryStore:
         if not topic or not topic.strip():
             return
         topic_key = topic.lower().strip()
-        with self._connect() as conn:
-            conn.execute(
+        now = _now()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
                 """
-                INSERT INTO mastery (topic_key, display)
-                VALUES (?, ?)
+                INSERT INTO mastery (topic_key, display, count, first_seen, last_seen)
+                VALUES (:key, :display, 1, :now, :now)
                 ON CONFLICT(topic_key) DO UPDATE SET
-                    count     = count + 1,
-                    last_seen = datetime('now'),
+                    count     = mastery.count + 1,
+                    last_seen = :now,
                     display   = excluded.display
-                """,
-                (topic_key, topic),
-            )
-            conn.commit()
+                """
+            ), {"key": topic_key, "display": topic, "now": now})
 
     def get_mastery_summary(self, limit: int = 5) -> list[dict]:
         """
@@ -332,11 +362,10 @@ class MemoryStore:
           - help_response → LLM context: "she knows the basics, go deeper"
           - chat_loop !mastery command → pretty table display
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT display, count FROM mastery ORDER BY count DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+        with self._engine.begin() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT display, count FROM mastery ORDER BY count DESC LIMIT :lim"
+            ), {"lim": limit}).mappings().fetchall()
             return [
                 {
                     "topic": row["display"],
@@ -353,73 +382,119 @@ class MemoryStore:
         The first session never has a summary (no farewell happened before it).
         Subsequent sessions return the summary written when the previous session ended.
         """
-        with self._connect() as conn:
-            row = conn.execute(
+        with self._engine.begin() as conn:
+            row = conn.execute(sa_text(
                 "SELECT summary FROM sessions ORDER BY id DESC LIMIT 1"
-            ).fetchone()
+            )).mappings().fetchone()
             return row["summary"] if row else ""
 
     def load_persona_config(self, persona_name: str = "srinika") -> dict[str, str]:
         """Return all persona config fields as {field_key: field_value}."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT field_key, field_value FROM persona_config WHERE persona_name = ?",
-                (persona_name,),
-            ).fetchall()
+        with self._engine.begin() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT field_key, field_value FROM persona_config WHERE persona_name = :pn"
+            ), {"pn": persona_name}).mappings().fetchall()
             return {row["field_key"]: row["field_value"] for row in rows}
 
     def save_persona_config(self, persona_name: str, field_key: str, field_value: str) -> None:
         """Upsert a single persona config field."""
-        with self._connect() as conn:
-            conn.execute(
+        now = _now()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
                 """
-                INSERT INTO persona_config (persona_name, field_key, field_value)
-                VALUES (?, ?, ?)
+                INSERT INTO persona_config (persona_name, field_key, field_value, updated_at)
+                VALUES (:pn, :fk, :fv, :now)
                 ON CONFLICT(persona_name, field_key) DO UPDATE SET
                     field_value = excluded.field_value,
-                    updated_at  = datetime('now')
-                """,
-                (persona_name, field_key, field_value),
-            )
-            conn.commit()
+                    updated_at  = :now
+                """
+            ), {"pn": persona_name, "fk": field_key, "fv": field_value, "now": now})
+
+    # ── Todos (Session 17) ───────────────────────────────────────────────────
+
+    def add_todo(
+        self,
+        text: str,
+        due_date: str | None = None,
+        recurrence: str | None = None,
+    ) -> int:
+        """
+        Insert a new todo item and return its id.
+
+        Uses RETURNING id which is supported by PostgreSQL (native) and
+        SQLite 3.35+ (Python 3.10 ships with SQLite 3.37+).
+
+        Args:
+            text:       What to remember / do (e.g. "finish science project").
+            due_date:   Optional date string (e.g. "2026-03-15" or "tomorrow").
+            recurrence: Optional repeat cadence ("daily" | "weekly" | None).
+        """
+        with self._engine.begin() as conn:
+            result = conn.execute(sa_text(
+                "INSERT INTO todos (text, due_date, recurrence) "
+                "VALUES (:text, :due, :recur) RETURNING id"
+            ), {"text": text.strip(), "due": due_date, "recur": recurrence})
+            return result.scalar()
+
+    def get_pending_todos(self) -> list[dict]:
+        """
+        Return all undone todos, oldest first.
+
+        Each entry: {id, text, created_at, due_date, recurrence}
+        """
+        with self._engine.begin() as conn:
+            rows = conn.execute(sa_text(
+                "SELECT id, text, created_at, due_date, recurrence "
+                "FROM todos WHERE done = 0 ORDER BY id ASC"
+            )).mappings().fetchall()
+            return [dict(row) for row in rows]
+
+    def mark_todo_done(self, todo_id: int) -> None:
+        """Mark a todo as done (sets done=1 and records done_at timestamp)."""
+        now = _now()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "UPDATE todos SET done = 1, done_at = :now WHERE id = :id"
+            ), {"now": now, "id": todo_id})
+
+    def delete_todo(self, todo_id: int) -> None:
+        """Permanently delete a todo by id."""
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "DELETE FROM todos WHERE id = :id"
+            ), {"id": todo_id})
 
     def delete_topic_entry(self, topic_text: str) -> None:
         """Delete all topic log entries matching the given display text."""
-        with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM topics WHERE topic = ? OR (topic = '' AND message = ?)",
-                (topic_text, topic_text),
-            )
-            conn.commit()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "DELETE FROM topics WHERE topic = :t OR (topic = '' AND message = :t)"
+            ), {"t": topic_text})
 
     def delete_mastery_entry(self, topic_key: str) -> None:
         """Delete a mastery record by topic key (case-insensitive)."""
-        with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM mastery WHERE topic_key = ?",
-                (topic_key.lower().strip(),),
-            )
-            conn.commit()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text(
+                "DELETE FROM mastery WHERE topic_key = :key"
+            ), {"key": topic_key.lower().strip()})
 
     def clear_all_history(self) -> None:
         """Wipe topics, sessions, and mastery — keeps profile and persona config."""
-        with self._connect() as conn:
-            conn.execute("DELETE FROM topics")
-            conn.execute("DELETE FROM sessions")
-            conn.execute("DELETE FROM mastery")
-            conn.commit()
+        with self._engine.begin() as conn:
+            conn.execute(sa_text("DELETE FROM topics"))
+            conn.execute(sa_text("DELETE FROM sessions"))
+            conn.execute(sa_text("DELETE FROM mastery"))
 
     def reset(self) -> None:
         """
         Wipe all memory and reset counters — keeps the DB file open (Windows-safe).
         Used by !reset-memory in chat_loop; avoids the PermissionError from
-        trying to delete a file that SQLite still has locked on Windows.
+        trying to delete a file that SQLAlchemy still has open on Windows.
         """
-        with self._connect() as conn:
-            conn.execute("DELETE FROM topics")
-            conn.execute("DELETE FROM sessions")
-            conn.execute("DELETE FROM mastery")
-            conn.execute(
+        with self._engine.begin() as conn:
+            conn.execute(sa_text("DELETE FROM topics"))
+            conn.execute(sa_text("DELETE FROM sessions"))
+            conn.execute(sa_text("DELETE FROM mastery"))
+            conn.execute(sa_text(
                 "UPDATE profile SET session_count = 0, total_turns = 0 WHERE id = 1"
-            )
-            conn.commit()
+            ))

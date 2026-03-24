@@ -1,0 +1,40 @@
+{
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "www.mayaai.ink",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "fedcdx6x5d.ap-southeast-1.awsapprunner.com"}]
+      }
+    },
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "_8404cc0764f5fea22d0ea7438d8961b8.www.mayaai.ink",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_5cc3e7fd9ec8172925a0ca01efe2be7d.jkddzztszm.acm-validations.aws"}]
+      }
+    },
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "_4e5e83023ed24eaf8e0cc84886b5f898.www.www.mayaai.ink",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_b76566ac84f59b20d6f9d1d9708da47f.jkddzztszm.acm-validations.aws"}]
+      }
+    },
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "_b4cb265e974684bdda45db23ad28bdd5.a8tuvzl4ibozb85bj57dxg4bi2dh1if.www.mayaai.ink",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_5774bef087a472eb347f0dc6511eb105.jkddzztszm.acm-validations.aws"}]
+      }
+    }
+  ]
+}

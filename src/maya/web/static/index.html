@@ -7,6 +7,38 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+
+<!-- ── PIN lock screen ──────────────────────────────────────────────── -->
+<div id="pin-overlay">
+  <div id="pin-box">
+    <div class="pin-logo">✦ MAYA</div>
+    <div class="pin-sub">Your Learning Companion</div>
+
+    <div class="pin-dots" id="pin-dots">
+      <span class="pin-dot" id="pin-d0"></span>
+      <span class="pin-dot" id="pin-d1"></span>
+      <span class="pin-dot" id="pin-d2"></span>
+      <span class="pin-dot" id="pin-d3"></span>
+    </div>
+    <div class="pin-error" id="pin-error" hidden>Galat PIN hai! Try again</div>
+
+    <div class="pin-pad">
+      <button class="pin-key" data-n="1">1</button>
+      <button class="pin-key" data-n="2">2</button>
+      <button class="pin-key" data-n="3">3</button>
+      <button class="pin-key" data-n="4">4</button>
+      <button class="pin-key" data-n="5">5</button>
+      <button class="pin-key" data-n="6">6</button>
+      <button class="pin-key" data-n="7">7</button>
+      <button class="pin-key" data-n="8">8</button>
+      <button class="pin-key" data-n="9">9</button>
+      <span class="pin-key-empty"></span>
+      <button class="pin-key" data-n="0">0</button>
+      <button class="pin-key pin-key-del" id="pin-del">⌫</button>
+    </div>
+  </div>
+</div>
+
 <div id="app">
 
   <!-- ── Header ──────────────────────────────────────────────────────── -->
@@ -53,6 +85,9 @@
       <!-- Tab bar -->
       <div class="sidebar-tabs">
         <button class="sidebar-tab active" data-tab="history">📚 History</button>
+        <button class="sidebar-tab" data-tab="reminders" id="reminders-tab">
+          ✅ Reminders<span id="todo-badge" class="todo-badge" hidden></span>
+        </button>
         <button class="sidebar-tab" data-tab="persona">✦ Persona</button>
       </div>
 
@@ -72,6 +107,21 @@
         </div>
         <div class="sidebar-section">
           <button class="clear-history-btn" onclick="clearAllHistory()">Clear all history</button>
+        </div>
+      </div>
+
+      <!-- Reminders panel -->
+      <div id="panel-reminders" class="sidebar-panel" hidden>
+        <div class="sidebar-section">
+          <h3>My Reminders</h3>
+          <ul id="todo-list" class="todo-list">
+            <li class="empty">No reminders yet!</li>
+          </ul>
+        </div>
+        <div class="sidebar-section todo-add-section">
+          <input type="text" id="todo-input" class="todo-input" placeholder="Add a reminder…" maxlength="200" />
+          <input type="date" id="todo-due" class="todo-due" title="Due date (optional)" />
+          <button id="todo-add-btn" class="todo-add-btn">+ Add</button>
         </div>
       </div>
 
@@ -142,7 +192,7 @@
           autocomplete="off"
           spellcheck="true"
         ></textarea>
-        <button id="mic-btn" class="mic-btn" title="Voice input" aria-label="Start voice input">
+        <button id="mic-btn" class="mic-btn" title="Hold to speak" aria-label="Hold to speak, release to send">
           🎤
         </button>
         <button id="send-btn" class="send-btn" disabled title="Send message (Enter)" aria-label="Send">

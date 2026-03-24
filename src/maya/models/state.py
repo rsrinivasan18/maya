@@ -100,6 +100,11 @@ class MayaState(TypedDict):
     preferred_model:  NotRequired[str]   # "auto"|"sarvam"|"claude"|"openai"|"ollama"
     agent_override:   NotRequired[str]   # "auto"|"science"|"math"|"story"|"general"
 
+    # ── Session 17: Todos / Reminders ──────────────────────────────────────────
+    # Loaded by load_memory; surfaced in reminder_agent + greeting badge.
+    # Each entry: {id, text, created_at, due_date, recurrence}
+    pending_todos: NotRequired[list[dict]]
+
     # ── Session 14: Editable Persona (built from SQLite persona_config) ─────────
     # Loaded by load_memory; consumed by help_response + math_tutor_response.
     # Empty string = no config yet → nodes fall back to .md files.

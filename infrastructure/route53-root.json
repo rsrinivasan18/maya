@@ -1,0 +1,14 @@
+{
+  "Changes": [{
+    "Action": "CREATE",
+    "ResourceRecordSet": {
+      "Name": "mayaai.ink",
+      "Type": "A",
+      "AliasTarget": {
+        "HostedZoneId": "Z09819469CZ3KQ8PWMCL",
+        "DNSName": "fedcdx6x5d.ap-southeast-1.awsapprunner.com",
+        "EvaluateTargetHealth": false
+      }
+    }
+  }]
+} 

@@ -74,7 +74,7 @@ def _clean_response(text: str) -> str:
     return re.sub(r"</?think>", "", text, flags=re.IGNORECASE).strip()
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -154,9 +154,10 @@ async def clear_all_history():
     return {"ok": True}
 
 
+@app.get("/health")
 @app.get("/api/health")
 async def health():
-    """Health check endpoint — useful for monitoring and RPi startup scripts."""
+    """Health check endpoint — /health for Docker/App Runner, /api/health for scripts."""
     return {"status": "ok", "version": "14.0"}
 
 
@@ -184,7 +185,123 @@ async def set_persona_config(update: PersonaConfigUpdate):
     return {"ok": True, "persona": update.persona_name, "field_key": update.field_key}
 
 
-# ── WebSocket endpoint ────────────────────────────────────────────────────────
+# ── Todo / Reminder endpoints (Session 17) ────────────────────────────────────
+
+class TodoCreate(BaseModel):
+    text:       str
+    due_date:   str | None = None
+    recurrence: str | None = None
+
+
+@app.get("/api/todos")
+async def get_todos():
+    """Return all pending (undone) todos."""
+    return {"todos": MemoryStore().get_pending_todos()}
+
+
+@app.post("/api/todos", status_code=201)
+async def create_todo(body: TodoCreate):
+    """Add a new todo item. Returns the new todo's id."""
+    todo_id = MemoryStore().add_todo(
+        body.text, due_date=body.due_date, recurrence=body.recurrence
+    )
+    return {"ok": True, "id": todo_id}
+
+
+@app.patch("/api/todos/{todo_id}/done")
+async def done_todo(todo_id: int):
+    """Mark a todo as done."""
+    MemoryStore().mark_todo_done(todo_id)
+    return {"ok": True}
+
+
+@app.delete("/api/todos/{todo_id}")
+async def delete_todo_api(todo_id: int):
+    """Permanently delete a todo."""
+    MemoryStore().delete_todo(todo_id)
+    return {"ok": True}
+
+
+# ── HTTP streaming chat endpoint (replaces WebSocket for cloud deployments) ────
+
+class ChatRequest(BaseModel):
+    text:            str
+    model:           str            = "auto"
+    agent:           str            = "auto"
+    session_id:      int | str      = ""   # /api/session returns int; keep flexible
+    message_history: list[dict]     = []
+
+
+@app.get("/api/session")
+async def get_session():
+    """
+    Start a new session and return connection info.
+    Called once on page load — replaces the WebSocket 'connected' message.
+    """
+    store = MemoryStore()
+    session_id = store.start_session()
+    profile    = store.get_profile()
+    return {
+        "type":          "connected",
+        "user_name":     profile["user_name"],
+        "session_count": profile["session_count"],
+        "session_id":    session_id,
+    }
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    """
+    Streaming chat endpoint — returns newline-delimited JSON events.
+
+    Event sequence:
+        {"type": "thinking"}
+        {"type": "response", "text": "...", "intent": "...", ...}
+      or on error:
+        {"type": "error", "text": "..."}
+
+    message_history is echoed back in the response event so the client
+    can send it on the next turn (stateless per-request design).
+    """
+    async def generate():
+        yield json.dumps({"type": "thinking"}) + "\n"
+
+        history_with_user = req.message_history + [
+            {"role": "user", "content": req.text}
+        ]
+        state = {
+            "user_input":      req.text,
+            "language":        "",
+            "intent":          "",
+            "response":        "",
+            "steps":           [],
+            "message_history": history_with_user,
+            "session_id":      req.session_id,
+            "preferred_model": req.model,
+            "agent_override":  req.agent,
+        }
+
+        try:
+            result = await asyncio.to_thread(maya_graph.invoke, state)
+            yield json.dumps({
+                "type":            "response",
+                "text":            _clean_response(result["response"]),
+                "intent":          result.get("intent", "general"),
+                "language":        result.get("language", "english"),
+                "steps":           result.get("steps", []),
+                "is_online":       result.get("is_online", False),
+                "message_history": result["message_history"],
+            }) + "\n"
+        except Exception as exc:
+            yield json.dumps({
+                "type": "error",
+                "text": f"Something went wrong: {exc}",
+            }) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+# ── WebSocket endpoint (kept for local dev / Raspberry Pi) ────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
