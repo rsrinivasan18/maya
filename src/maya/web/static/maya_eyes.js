@@ -49,10 +49,12 @@ const MAYA_EYES = new p5(function(p) {
     W = Math.round(H / 0.65);
 
     const s = W / 220;
+    const cx = W / 2;          // true canvas centre
+    const eyeSpread = 48 * s;  // each eye exactly this far from centre
 
     EYE = {
-      leftX:          62  * s,
-      rightX:         158 * s,
+      leftX:          cx - eyeSpread,
+      rightX:         cx + eyeSpread,
       y:              H   * 0.38,   // upper 38% of canvas
       w:              66  * s,      // eye width
       h:              84  * s,      // tall oval — feminine
@@ -111,7 +113,6 @@ const MAYA_EYES = new p5(function(p) {
   // ─────────────────────────────────────────
   p.draw = function() {
     p.clear();
-    p.background(8, 8, 16);
 
     updatePupilTargets();
     updateBlink();
@@ -160,7 +161,7 @@ const MAYA_EYES = new p5(function(p) {
 
     // ── 4. Curved eyelid overlay ──────────────────────────────────
     if (lid > 0.02) {
-      p.fill(8, 8, 16);
+      p.fill(13, 11, 26);   // match page --bg so lid blends on transparent canvas
       const lidEdge = -eh_full / 2 + eh_full * lid;
       p.beginShape();
       p.vertex(-ew / 2 - 3, -eh_full);      // top-left
@@ -173,8 +174,12 @@ const MAYA_EYES = new p5(function(p) {
     // ── 5. Upper lid arc + eyelashes ─────────────────────────────
     const openRatio = 1 - lid;
     if (openRatio > 0.1) {
-      // Upper lid outline arc
-      p.stroke(25, 10, 45);
+      // Upper lid outline arc — dark teal, blends with transparent bg
+      p.stroke(
+        eyeColor[0] * 0.12 + 8,
+        eyeColor[1] * 0.12 + 18,
+        eyeColor[2] * 0.12 + 22
+      );
       p.strokeWeight(EYE.lashW * 1.6);
       p.noFill();
       p.arc(0, 0, ew, eh, p.PI, p.TWO_PI);
@@ -298,16 +303,19 @@ const MAYA_EYES = new p5(function(p) {
 
   // ─────────────────────────────────────────
   function updatePupilTargets() {
-    const dx    = pointerX - EYE.leftX;
-    const dy    = pointerY - EYE.y;
-    const dist  = Math.sqrt(dx * dx + dy * dy);
-    const maxD  = EYE.pupilMaxOffset;
-    const scale = dist > maxD ? maxD / dist : 1;
+    const maxD   = EYE.pupilMaxOffset;
+    const midX   = (EYE.leftX + EYE.rightX) / 2;
 
-    targetLeft  = { x: EYE.leftX  + dx * scale * 0.5,
-                    y: EYE.y      + dy * scale * 0.5 };
-    targetRight = { x: EYE.rightX + (pointerX - EYE.rightX) * scale * 0.5,
-                    y: EYE.y      + (pointerY - EYE.y)       * scale * 0.5 };
+    // Single offset from the midpoint — both pupils move identically
+    const dx     = pointerX - midX;
+    const dy     = pointerY - EYE.y;
+    const dist   = Math.sqrt(dx * dx + dy * dy);
+    const scale  = dist > maxD ? maxD / dist : 1;
+    const offX   = dx * scale * 0.5;
+    const offY   = dy * scale * 0.5;
+
+    targetLeft  = { x: EYE.leftX  + offX, y: EYE.y + offY };
+    targetRight = { x: EYE.rightX + offX, y: EYE.y + offY };
 
     // State overrides
     if (currentState === 'thinking') {
@@ -345,8 +353,8 @@ const MAYA_EYES = new p5(function(p) {
     if (currentState === 'sleepy') {
       targetLidLeft = targetLidRight = 0.55;
     } else if (currentState === 'focused') {
-      targetLidLeft  = 0.3;
-      targetLidRight = 0.1;
+      targetLidLeft  = 0.2;
+      targetLidRight = 0.2;
     } else if (currentState === 'sad') {
       targetLidLeft = targetLidRight = 0.35;
     } else if (currentState === 'waving') {
@@ -393,18 +401,18 @@ const MAYA_EYES = new p5(function(p) {
 
   // ─────────────────────────────────────────
   const STATE_COLORS = {
-    idle:        [0,   229, 255],
-    thinking:    [130, 100, 255],
-    talking:     [0,   229, 255],
-    excited:     [255, 200,   0],
-    happy:       [0,   255, 140],
-    celebrating: [255, 215,   0],
-    proud:       [0,   255, 255],
-    sad:         [100, 150, 255],
-    waving:      [0,   229, 255],
-    focused:     [255, 140,   0],
-    sleepy:      [80,   80, 150],
-    patient:     [0,   229, 255],
+    idle:        [0,   191, 255],   // #00BFFF — deep sky cyan
+    thinking:    [130, 100, 255],   // purple
+    talking:     [0,   191, 255],   // cyan
+    excited:     [255, 210,  50],   // gold-yellow
+    happy:       [0,   191, 255],   // cyan (was green — fixed)
+    celebrating: [255, 215,   0],   // gold
+    proud:       [0,   210, 255],   // bright cyan
+    sad:         [100, 150, 255],   // soft blue
+    waving:      [0,   191, 255],   // cyan
+    focused:     [255, 160,  40],   // amber
+    sleepy:      [80,   80, 150],   // dark indigo
+    patient:     [0,   191, 255],   // cyan
   };
 
   window.mayaEyesSetState = function(state) {

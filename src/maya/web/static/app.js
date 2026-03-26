@@ -666,7 +666,7 @@ function toggleSidebar() {
   el.sidebarOverlay.classList.toggle('visible', el.sidebar.classList.contains('open'));
 }
 
-el.sidebarToggle.addEventListener('click', toggleSidebar);
+if (el.sidebarToggle) el.sidebarToggle.addEventListener('click', toggleSidebar);
 el.sidebarOverlay.addEventListener('click', toggleSidebar);
 
 // ── Sidebar tabs ──────────────────────────────────────────────────────────────

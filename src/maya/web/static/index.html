@@ -43,30 +43,22 @@
 
   <!-- ── Header ──────────────────────────────────────────────────────── -->
   <header id="header">
-    <button id="sidebar-toggle" class="icon-btn" title="Toggle history" aria-label="Toggle sidebar">
-      ☰
-    </button>
     <span class="logo">✦ MAYA</span>
     <span id="status-dot" class="status-dot offline" title="Connection status"></span>
     <span id="status-text" class="status-text">connecting…</span>
 
     <div class="header-controls">
-      <div class="select-group">
-        <label for="model-select">Model</label>
-        <select id="model-select" title="Choose which LLM MAYA uses">
-          <option value="auto">Auto</option>
-        </select>
-      </div>
-      <div class="select-group">
-        <label for="agent-select">Agent</label>
-        <select id="agent-select" title="Choose which agent persona responds">
-          <option value="auto">Auto</option>
-          <option value="science">Science</option>
-          <option value="math">Math</option>
-          <option value="story">Story</option>
-          <option value="general">General</option>
-        </select>
-      </div>
+      <!-- hidden inputs — kept for app.js compatibility, not shown to Srinika -->
+      <select id="model-select" hidden aria-hidden="true">
+        <option value="auto">Auto</option>
+      </select>
+      <select id="agent-select" hidden aria-hidden="true">
+        <option value="auto">Auto</option>
+        <option value="science">Science</option>
+        <option value="math">Math</option>
+        <option value="story">Story</option>
+        <option value="general">General</option>
+      </select>
       <button id="voice-toggle" class="icon-btn" title="Voice output off — click to enable" aria-label="Toggle voice output">
         🔇
       </button>
@@ -179,14 +171,14 @@
         <div class="thinking-dots" aria-hidden="true">
           <span></span><span></span><span></span>
         </div>
-        <span class="thinking-text">thinking…</span>
+        <span class="thinking-text">hmm, let me think… ✨</span>
       </div>
 
       <!-- Input area -->
       <div class="input-area">
         <textarea
           id="input"
-          placeholder="Ask me anything…"
+          placeholder="Ask me anything, Srinika!"
           rows="1"
           aria-label="Message input"
           autocomplete="off"
