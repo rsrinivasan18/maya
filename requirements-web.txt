@@ -29,7 +29,7 @@ anthropic>=0.40.0
 openai>=1.0.0
 
 # ─── LiteLLM — unified LLM interface ───────────────────────────────────────────
-litellm>=1.0.0
+litellm==1.82.6          # PINNED — 1.82.7/1.82.8 contained credential-stealing malware (TeamPCP, 2026-03-24)
 
 # ─── Web Backend (FastAPI + WebSocket) ─────────────────────────────────────────
 fastapi>=0.115.0
