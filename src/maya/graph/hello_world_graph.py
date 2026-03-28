@@ -88,6 +88,40 @@ _CBSE_CONTEXT = (
     "Always infer from CBSE Grade 4 context and answer confidently without asking for spelling clarification."
 )
 
+# Hard no-markdown reminder appended to every system prompt.
+# LLMs ignore this instruction in .md files — injecting it in Python ensures it sticks.
+_NO_MARKDOWN = (
+    "CRITICAL: Never use markdown formatting in your response. "
+    "No **bold**, no *italic*, no bullet points (- or *), no numbered lists, "
+    "no headers (# or ##), no backticks. "
+    "Plain conversational sentences only. Write like you are speaking to a child."
+)
+
+
+def _strip_markdown(text: str) -> str:
+    """
+    Post-processing safety net: strip common markdown from LLM response.
+    Removes bold/italic markers, headers, bullet points, and horizontal rules.
+    """
+    import re
+    # Remove bold and italic: **text** → text, *text* → text, __text__ → text
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
+    # Remove ATX headers: ## Header → Header
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Remove bullet points: "- item" or "* item" at line start → "item"
+    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
+    # Remove numbered lists: "1. item" → "item"
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Remove horizontal rules: --- or *** or ___
+    text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Remove inline code: `code` → code
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Collapse excess blank lines left by removals
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 # Map agent_override values to prompt file names
 _AGENT_PROMPT_MAP: dict[str, str] = {
     "science": "science_agent",
@@ -638,6 +672,7 @@ def math_tutor_response(state: MayaState) -> dict:
         )
 
     system_content += f"\n\n{_CBSE_CONTEXT}"
+    system_content += f"\n\n{_NO_MARKDOWN}"
 
     messages = [{"role": "system", "content": system_content}] + history
 
@@ -647,6 +682,7 @@ def math_tutor_response(state: MayaState) -> dict:
         fallback_error_prefix="MAYA Math Tutor",
         force_provider=preferred_model,
     )
+    response = _strip_markdown(response)
 
     # Don't store error responses in history — they corrupt context for next turn
     history_update = [] if provider == "error" else [{"role": "assistant", "content": response}]
@@ -715,11 +751,13 @@ def help_response(state: MayaState) -> dict:
         )
 
     system_content += f"\n\n{_CBSE_CONTEXT}"
+    system_content += f"\n\n{_NO_MARKDOWN}"
 
     messages = [{"role": "system", "content": system_content}] + history
 
     preferred_model = state.get("preferred_model") or None  # None → auto tiered
     response, provider = call_llm_tiered(messages, is_online, force_provider=preferred_model)
+    response = _strip_markdown(response)
 
     # Don't store error responses in history — they corrupt context for next turn
     history_update = [] if provider == "error" else [{"role": "assistant", "content": response}]
