@@ -83,6 +83,14 @@ const MAYA_EYES = new p5(function(p) {
   function max(a, b) { return a > b ? a : b; }
 
   // ─────────────────────────────────────────
+  // ── Watchdog — restarts draw loop if frozen for 10s ──────────────────────
+  let lastDrawMs = Date.now();
+  setInterval(function() {
+    if (Date.now() - lastDrawMs > 10000) {
+      p.loop();   // restart if draw() hasn't run in 10 seconds
+    }
+  }, 5000);
+
   p.setup = function() {
     initGeometry();
     let canvas = p.createCanvas(W, H);
@@ -112,6 +120,7 @@ const MAYA_EYES = new p5(function(p) {
 
   // ─────────────────────────────────────────
   p.draw = function() {
+    lastDrawMs = Date.now();   // watchdog heartbeat
     p.clear();
 
     updatePupilTargets();
@@ -404,9 +413,9 @@ const MAYA_EYES = new p5(function(p) {
     idle:        [0,   191, 255],   // #00BFFF — deep sky cyan
     thinking:    [130, 100, 255],   // purple
     talking:     [0,   191, 255],   // cyan
-    excited:     [255, 210,  50],   // gold-yellow
-    happy:       [0,   191, 255],   // cyan (was green — fixed)
-    celebrating: [255, 215,   0],   // gold
+    excited:     [0,   220, 255],   // bright cyan (was gold — eyes always cyan)
+    happy:       [0,   191, 255],   // cyan
+    celebrating: [0,   230, 255],   // vivid cyan (was gold — eyes always cyan)
     proud:       [0,   210, 255],   // bright cyan
     sad:         [100, 150, 255],   // soft blue
     waving:      [0,   191, 255],   // cyan

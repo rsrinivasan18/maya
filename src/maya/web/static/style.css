@@ -592,8 +592,14 @@ body {
   flex-shrink: 0;
 }
 
+#maya-p5-canvas {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
 #maya-p5-canvas canvas {
   display: block;
+  margin: 0 auto;
 }
 
 #maya-caption {
